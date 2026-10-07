@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <title>Worklet</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <meta http-equiv="Cache-Control" content="no-store">
+  <link rel="stylesheet" href="app.css?v=91">
+</head>
+<body>
+  <div class="shell">
+    <header class="top">
+      <button class="icon-btn" type="button" id="menuBtn" title="Меню">☰</button>
+      <div class="top-mid">
+        <div class="brand">Worklet</div>
+        <div class="sub" id="who">мини-приложение</div>
+      </div>
+      <div class="top-actions">
+        <button class="ghost" type="button" id="expandBtn" title="Развернуть">
+          <span class="gico">↕</span><span class="glbl">Развернуть</span>
+        </button>
+        <button class="ghost" type="button" id="fsBtn" title="На весь экран">
+          <span class="gico">⛶</span><span class="glbl">На весь экран</span>
+        </button>
+        <button class="ghost" id="homeBtn" hidden>Назад</button>
+        <div class="ava-sm" id="whoAva">W</div>
+      </div>
+    </header>
+    <main id="app"></main>
+    <nav id="dock" class="dock" hidden></nav>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="app.js?v=91"></script>
+</body>
+</html>

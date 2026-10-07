@@ -1,0 +1,16 @@
+[Unit]
+Description=ORH3 Mini App
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/miniapp
+ExecStart=/root/miniapp/miniapp
+Restart=always
+RestartSec=5
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
