@@ -21,6 +21,11 @@ func StartCron(api *API) *cron.Cron {
 	}
 	c := cron.New(cron.WithLocation(loc), cron.WithSeconds())
 	db, bot := api.db, api.bot
+	_, _ = c.AddFunc("0 * * * * *", func() {
+		if _, _, err := db.MonthlySnapshot(time.Now(), true, 0); err != nil {
+			log.Printf("monthly archive: %v", err)
+		}
+	})
 	_, _ = c.AddFunc("0 0 10 * * *", func() { sendOwnerSummary(db, bot, loc) })
 	_, _ = c.AddFunc("0 0 10 * * 1-5", func() { sendRatesDM(api, loc) })
 	_, _ = c.AddFunc("0 0 13 * * 1-5", func() { sendRatesDM(api, loc) })

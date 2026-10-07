@@ -253,6 +253,8 @@ const SECTIONS = [
 ];
 
 const POS_ACCESS = [
+  { key: "meetings", title: "Встречи" },
+  { key: "analytics", title: "Бухгалтерия и аналитика" },
   { key: "tasks", title: "Канбан" },
   { key: "requests", title: "Заявки" },
   { key: "saldo", title: "Сальдо" },
@@ -473,7 +475,7 @@ function paintDock() {
   const items = [
     { key: "home", title: "Главная", ico: "⌂" },
     { key: "requests", title: "Заявки", ico: "📝", badge: unreadOf("requests") },
-    { key: "tasks", title: "Канбан", ico: "🗂", badge: unreadOf("tasks") },
+    { key: "rates", title: "Курсы", ico: "💱" },
     { key: "saldo", title: "Сальдо", ico: "📒", badge: unreadOf("saldo") },
     { key: "approvals", title: "Согл.", ico: "✅", badge: unreadOf("approvals") }
   ];
@@ -650,6 +652,9 @@ async function renderMore() {
     if (!show) return;
     items.push(`<button type="button" class="more-item" data-go="${key}"><div class="ico">${ico}</div><div><b>${esc(title)}</b><span>${esc(desc)}</span></div></button>`);
   };
+  add("analytics", "Бухгалтерия и аналитика", "Показатели по периоду", "📊", isAdmin() || has("analytics"));
+  add("meetings", "Встречи", "Расписание по Москве", "📅", isAdmin() || has("meetings"));
+  add("documents", "Документы", "Файлы и архивы", "📁", isAdmin() || has("documents"));
   add("requests", "Заявки", "Сделки отдела", "📝", seeAll() || has("requests"));
   add("tasks", "Канбан", "Воронка задач отдела", "🗂", seeAll() || has("tasks"));
   add("saldo", "Сальдо", "Постановки и выгрузка", "📒", seeAll() || has("saldo"));
@@ -686,6 +691,19 @@ function page(title, html, token) {
       }
     }
   } catch (_) {}
+  if (currentSection === "directory") {
+    const btn=document.createElement("button");btn.className="btn";btn.textContent="Агенты";btn.onclick=showAgents;app.querySelector(".page h2").after(btn);
+  }
+  if (isAdmin() && currentSection === "documents") {
+    const btn=document.createElement("button");btn.className="btn";btn.textContent="⚙ Автосохранение Mini App";btn.onclick=editMonthlyArchive;app.querySelector(".page h2").after(btn);
+  }
+  if (isAdmin()) {
+    const scope = {requests:"approval",approvals:"approval",saldo:"saldo",payments:"payment"}[currentSection];
+    if (scope) {
+      const btn = document.createElement("button"); btn.className="btn"; btn.textContent="⚙ Настройки чата";
+      btn.onclick=()=>openSectionSettings(scope); app.querySelector(".page h2").after(btn);
+    }
+  }
   paintDock();
   copyBind();
 }
@@ -694,6 +712,8 @@ async function openSection(name) {
   currentSection = name === "disputes" ? "approvals" : name;
   await markSeen(currentSection);
   try {
+    if (name === "analytics") return renderAnalytics();
+    if (name === "meetings") return renderMeetings();
     if (name === "requests") return renderRequests();
     if (name === "tasks") return renderTasks();
     if (name === "payments") return renderPayments();
@@ -798,6 +818,9 @@ let docsName = "";
 let saldoTab = "menu";
 let saldoFromRequest = false;
 let saldoDraft = { cp: "", kind: "", action: "", currency: "", requestId: 0, counterpartyId: 0, reqTitle: "" };
+let reqFilter = "all";
+let reqScope = "mine";
+const reqStatuses = new Set(["open","in_progress","closed"]);
 let reqOpen = 0;
 let reqPane = "";
 let docsPoll = 0;
@@ -1047,6 +1070,7 @@ function dirItemCard(u, kind, dirs) {
     extra = `<div class="row wrap">
       <input data-clname="${u.id}" placeholder="Название" value="${esc(u.name || "")}">
       <input data-clwork="${u.id}" placeholder="Рабочий ID" value="${esc(u.work_id || "")}">
+      ${admin ? `<label><input type="checkbox" data-clcommission="${u.id}" ${u.commission_enabled?"checked":""}>Выплачивается комиссия</label>` : `<p>Комиссия клиента: ${u.commission_enabled?"Да":"Нет"}</p>`}
       ${admin ? `<button type="button" class="btn" data-savecl="${u.id}">Сохранить</button>` : ""}
     </div>
     <div class="meta">Сотрудники (ID карточки)</div>
@@ -1295,7 +1319,7 @@ async function renderDirectory() {
       const name = app.querySelector(`[data-clname="${b.dataset.savecl}"]`);
       const work = app.querySelector(`[data-clwork="${b.dataset.savecl}"]`);
       try {
-        await api("/api/directory", { method: "POST", body: JSON.stringify({ kind: "clients", id: Number(b.dataset.savecl), name: name ? name.value : "", work_id: work ? work.value : "" }) });
+        await api("/api/directory", { method: "POST", body: JSON.stringify({ kind: "clients", commission_enabled: app.querySelector(`[data-clcommission="${b.dataset.savecl}"]`).checked, id: Number(b.dataset.savecl), name: name ? name.value : "", work_id: work ? work.value : "" }) });
         toast("Клиент сохранён");
         renderDirectory();
       } catch (e) { toast(e.message); }
@@ -1398,10 +1422,10 @@ async function downloadDeal(id, name) {
   toast("Если файл не сохранился — «Себе в личку»: так Mini App не затрётся.");
 }
 
-async function downloadVault(id, name) {
+async function downloadVault(id, name, entry = "") {
   const headers = {};
   if (tg && tg.initData) headers["X-Telegram-Init-Data"] = tg.initData;
-  const res = await fetch("/api/documents?id=" + id, { headers });
+  const res = await fetch("/api/documents?id=" + id + (entry ? "&entry=" + encodeURIComponent(entry) : ""), { headers });
   if (!res.ok) throw new Error(String(await res.text() || res.status).trim());
   const blob = await res.blob();
   const safe = String(name || "file").replace(/[/\\?%*:|"<>]/g, "_") || "file";
@@ -1466,9 +1490,9 @@ function canDelFile(f) {
 }
 
 function reqUndoRow(r) {
-  if (!isMine(r.created_by)) return "";
-  const ret = r.status && r.status !== "open" && r.status !== "deleted"
-    ? `<button type="button" class="btn" data-retreq="${r.id}">Вернуть</button>` : "";
+  if (!r.can_delete) return "";
+  const ret = isAdmin() && ["success_closed", "failed"].includes(r.status)
+    ? `<button type="button" class="btn" data-retreq="${r.id}">Открыть повторно</button>` : "";
   return `<div class="row wrap">
     ${ret}
     <button type="button" class="btn bad" data-delreq="${r.id}">Удалить</button>
@@ -1499,7 +1523,7 @@ function bindUndo() {
     openSection(currentSection);
   };
   app.querySelectorAll("[data-delreq]").forEach((b) => b.onclick = async () => {
-    const ok = await ask("Удалить заявку? Её не будет в списке.");
+    const ok = await ask("Точно хотите удалить заявку? Она исчезнет из списка заявок.");
     if (!ok) return;
     try {
       await api("/api/requests?id=" + b.dataset.delreq, { method: "DELETE" });
@@ -1510,7 +1534,9 @@ function bindUndo() {
   });
   app.querySelectorAll("[data-retreq]").forEach((b) => b.onclick = async () => {
     try {
-      await api("/api/requests", { method: "POST", body: JSON.stringify({ id: Number(b.dataset.retreq), status: "open" }) });
+      const reason = prompt("Причина повторного открытия");
+      if (!reason || !reason.trim()) return;
+      await api("/api/requests", { method: "POST", body: JSON.stringify({ id: Number(b.dataset.retreq), action: "reopen", close_reason: reason }) });
       toast("Заявка возвращена");
       after();
     } catch (e) { toast(e.message); }
@@ -1595,114 +1621,158 @@ function reqPeople(r) {
 }
 
 function reqStatusBtns(r) {
-  const st = String(r.status || "");
-  return `<div class="kb req-status">
-      <button type="button" class="kb-btn ${st === "in_progress" ? "on" : ""}" data-st="${r.id}" data-v="in_progress">В работе</button>
-      <button type="button" class="kb-btn ${st === "done" ? "on" : ""}" data-st="${r.id}" data-v="done">В таблицу</button>
-    </div>`;
+  if (!r.can_edit) return "";
+  if (r.status === "open") return `<button class="btn" data-st="${r.id}" data-v="in_progress">В работе</button>`;
+  if (r.status !== "in_progress") return "";
+  return `<div class="row wrap"><button class="btn" id="reqEditComment">Изменить комментарий</button>
+    <button class="btn" data-st="${r.id}" data-v="success_closed" ${r.workflow_stage !== "complete" ? "disabled" : ""}>Успешно закрыта</button>
+    <button class="btn bad" data-st="${r.id}" data-v="failed">Сделка не состоялась</button></div>`;
 }
 
-async function showArchiveModal(reqId) {
-  const [dirs] = await Promise.all([api("/api/directory")]);
-  const companies = asList(dirs.companies);
-  const cps = asList(dirs.counterparties);
+function archiveDialog(title) {
+  const dialog = document.createElement("dialog");
+  dialog.className = "archive-modal";
+  dialog.innerHTML = `<header><h3>${esc(title)}</h3><button type="button" class="btn" data-close>Закрыть</button></header><div class="archive-body"></div>`;
+  document.body.appendChild(dialog);
+  dialog.querySelector("[data-close]").onclick = () => dialog.close();
+  dialog.onclose = () => dialog.remove();
+  dialog.showModal();
+  return dialog;
+}
 
-  const scopeSel = (val) => `<option value="${val}" ${val === "company" ? "selected" : ""}>Компания</option>`;
-  const scopeHtml = `
-    <select id="arcScope">
-      <option value="company">Компания</option>
-      <option value="counterparty">Контрагент</option>
-      <option value="misc">Разное</option>
-    </select>`;
+async function removeSavedRequest(id, refresh) {
+  if (!await ask("Удалить сохранённую копию со всеми вложениями из документов? Исходная заявка останется.")) return false;
+  await api("/api/documents?id=" + id, { method: "DELETE" });
+  toast("Удалено из документов");
+  await refresh();
+  return true;
+}
 
-  const renderOwner = (scope) => {
-    if (scope === "company") return `<select id="arcOwner">${companies.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>`;
-    if (scope === "counterparty") return `<select id="arcOwner">${cps.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select>`;
-    return `<div class="meta">Не требуется</div>`;
-  };
+async function showSavedRequest(id, refresh = renderDocuments) {
+  const dialog = archiveDialog("Сохранённая заявка");
+  const body = dialog.querySelector(".archive-body");
+  body.textContent = "Загрузка…";
+  try {
+    const data = await api("/api/documents?id=" + id + "&archive=1");
+    if (!dialog.isConnected) return;
+    const f = data.file;
+    const entries = asList(data.entries);
+    body.innerHTML = `<h3>${esc(f.request_uid)} · ${esc(f.request_title || "")}</h3>
+      <p class="meta">Сохранено ${esc(fmtWhen(f.created_at))} · ${esc(f.created_name)}</p>
+      <div class="row wrap"><button class="btn primary" data-download-all>Скачать всё ZIP</button>
+      <button class="btn" data-report>Скачать отчёт</button>
+      ${(isAdmin() || isMine(f.created_by)) ? `<button class="btn bad" data-remove>Удалить из документов</button>` : ""}</div>
+      <h3>Вложения · ${entries.length}</h3>
+      ${entries.map((entry, i) => `<div class="card"><b>${esc(entry.name)}</b><div class="meta">${fmtSize(entry.size)}</div>
+        <div class="row wrap"><button class="btn" data-entry-view="${i}">Открыть</button><button class="btn" data-entry-download="${i}">Скачать</button></div></div>`).join("")}
+      <h3>Карточка, сообщения и операции</h3><pre class="archive-report">${esc(data.report)}</pre>`;
+    body.querySelector("[data-download-all]").onclick = async () => { try { await downloadVault(id, f.name); } catch (e) { toast(e.message); } };
+    body.querySelector("[data-report]").onclick = async () => { try { await downloadVault(id, "Заявка_" + f.request_uid + ".txt", "report.txt"); } catch (e) { toast(e.message); } };
+    body.querySelectorAll("[data-entry-download]").forEach((b) => b.onclick = async () => {
+      const entry = entries[Number(b.dataset.entryDownload)];
+      try { await downloadVault(id, entry.name, entry.path); } catch (e) { toast(e.message); }
+    });
+    body.querySelectorAll("[data-entry-view]").forEach((b) => b.onclick = () => {
+      const entry = entries[Number(b.dataset.entryView)];
+      previewVaultFile(id, entry.name, entry.path);
+    });
+    const remove = body.querySelector("[data-remove]");
+    if (remove) remove.onclick = async () => {
+      remove.disabled = true;
+      try { if (await removeSavedRequest(id, refresh)) dialog.close(); } catch (e) { toast(e.message); }
+      finally { remove.disabled = false; }
+    };
+  } catch (e) { body.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
 
-  const renderFolder = async (scope, ownerId) => {
-    let folderHtml = `<select id="arcFolder"><option value="internal">Внутренний контур</option><option value="external">Внешний контур</option></Cselect>`;
-    if (scope === "company" && ownerId) {
-      const tabs = await api("/api/documents?scope=company&owner=" + ownerId);
-      const tList = asList(tabs && tabs.tabs);
-      if (tList.length) {
-        folderHtml = `<select id="arcFolder">
-          <option value="internal">Внутренний контур</option>
-          <option value="external">Внешний контур</option>
-          ${tList.map(t => `<option value="${t.contour}:${t.id}">${esc(t.name)}</option>`).join("")}
-        </select>`;
-      }
-    }
-    return folderHtml;
-  };
+async function previewVaultFile(id, name, entry = "") {
+  const dialog = archiveDialog(name || "Просмотр файла");
+  const body = dialog.querySelector(".archive-body");
+  body.textContent = "Загрузка…";
+  let url;
+  dialog.addEventListener("close", () => { if (url) URL.revokeObjectURL(url); });
+  try {
+    const headers = {};
+    if (tg && tg.initData) headers["X-Telegram-Init-Data"] = tg.initData;
+    const res = await fetch("/api/documents?id=" + id + (entry ? "&entry=" + encodeURIComponent(entry) : ""), { headers });
+    if (!res.ok) throw new Error(await res.text());
+    const blob = await res.blob();
+    if (!dialog.isConnected) return;
+    const mime = blob.type.split(";")[0];
+    body.innerHTML = `<button class="btn" data-download>Скачать</button><div class="archive-preview"></div>`;
+    body.querySelector("[data-download]").onclick = async () => { try { await downloadVault(id, name, entry); } catch (e) { toast(e.message); } };
+    const preview = body.querySelector(".archive-preview");
+    if (mime.startsWith("text/") || mime === "application/json") {
+      const pre = document.createElement("pre"); pre.className = "archive-report"; pre.textContent = await blob.text(); preview.appendChild(pre);
+    } else if (mime.startsWith("image/") || mime === "application/pdf" || mime.startsWith("audio/") || mime.startsWith("video/")) {
+      url = URL.createObjectURL(blob);
+      const el = document.createElement(mime.startsWith("image/") ? "img" : mime === "application/pdf" ? "iframe" : mime.startsWith("audio/") ? "audio" : "video");
+      if (el.tagName === "IFRAME") { el.setAttribute("sandbox", ""); el.title = name; }
+      if (el.tagName === "IMG") el.alt = name;
+      el.controls = true; el.src = url; preview.appendChild(el);
+    } else { preview.textContent = "Этот формат можно скачать и открыть на устройстве."; }
+  } catch (e) { body.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
 
-  const modal = document.createElement("div");
-  modal.className = "modal";
-  modal.innerHTML = `
-    <div class="modal-card">
-      <h3>Сохранить заявку в документы</h3>
-      <div class="row">
-        <div class="meta">Область</div>
-        ${scopeHtml}
-      </div>
-      <div class="row" id="arcOwnerRow"></div>
-      <div class="row">
-        <div class="meta">Папка / Контур</div>
-        <div id="arcFolderContainer"></div>
-      </div>
-      <div class="row wrap">
-        <button class="btn bad" id="arcCancel">Отмена</button>
-        <button class="btn primary" id="arcGo">Сохранить</button>
-      </div>
-    </div>`;
-  document.body.appendChild(modal);
+const REQUEST_FILTERS = [
+  { key: "all", title: "Все заявки" },
+  { key: "open", title: "Открытые заявки" },
+  { key: "closed", title: "Закрытые заявки" },
+  { key: "in_progress", title: "В работе" },
+];
 
-  const scopeEl = $("arcScope");
-  const ownerRow = $("arcOwnerRow");
-  const folderCont = $("arcFolderContainer");
+function requestCategory(r) {
+  if (["done", "closed", "success_closed", "failed"].includes(r.status)) return "closed";
+  if (r.status === "in_progress") return "in_progress";
+  return "open";
+}
 
-  const updateFields = async () => {
-    const scope = scopeEl.value;
-    ownerRow.innerHTML = `<div class="meta">Сущность</div>${renderOwner(scope)}`;
-    const owner = $("arcOwner") ? Number($("arcOwner").value) : 0;
-    folderCont.innerHTML = await renderFolder(scope, owner);
-  };
+function requestStatusLabel(r) {
+  return { open: "Открыта", success_closed: "Успешно закрыта", failed: "Сделка не состоялась", done: "Успешно закрыта", closed: "Успешно закрыта", in_progress: "В работе" }[r.status] || r.status;
+}
 
-  scopeEl.onchange = updateFields;
-  updateFields();
+function requestFilterButtons(requests) {
+  return `<div class="request-filters" role="group" aria-label="Категории заявок">
+    ${REQUEST_FILTERS.filter(f=>f.key!=="all").map(f=>`<label class="btn"><input type="checkbox" data-reqfilter="${f.key}" ${reqStatuses.has(f.key)?"checked":""}>${f.title} <span class="request-filter-count">${requests.filter(r=>requestCategory(r)===f.key).length}</span></label>`).join("")}
+  </div>`;
+}
 
-  $("arcCancel").onclick = () => { modal.remove(); };
-  $("arcGo").onclick = async () => {
-    try {
-      await api("/api/requests/archive", {
-        method: "POST",
-        body: JSON.stringify({
-          request_id: reqId,
-          scope: scopeEl.value,
-          owner_id: $("arcOwner") ? Number($("arcOwner").value) : 0,
-          folder: $("arcFolder") ? $("arcFolder").value : "internal"
-        })
-      });
-      toast("Заявка сохранена в документы");
-      modal.remove();
-    } catch (e) { toast(e.message); }
-  };
+function renderRequestList(requests) {
+  const visible=requests.filter(r=>reqStatuses.has(requestCategory(r)));
+  $("requestList").innerHTML = visible.map((r) => `
+    <div class="card" data-request-card="${r.id}">
+      <h3>${esc(r.uid)} <span class="badge">${requestStatusLabel(r)}</span> ${payBadge(r.payment_status)}</h3>
+      ${r.comment ? `<p>${esc(r.comment)}</p>` : ""}
+      ${r.close_reason ? `<p>Причина: ${esc(r.close_reason)}</p>` : ""}
+      ${!r.can_edit ? `<p class="badge">Только просмотр</p>` : ""}
+      <div class="meta">${esc(fmtWhen(r.created_at))}${r.files_count ? " · файлов: " + r.files_count : ""}${r.messages_count ? " · сообщ.: " + r.messages_count : ""}</div>
+      ${reqPeople(r)}
+      <button class="btn primary" data-openreq="${r.id}">Открыть</button>
+    </div>`).join("") || `<p class="empty">${reqFilter === "all" ? "Пока нет заявок" : "В этой категории пока нет заявок"}</p>`;
+  app.querySelectorAll("[data-openreq]").forEach((button) => button.onclick = () => {
+    reqOpen = Number(button.dataset.openreq);
+    reqPane = "";
+    buzz();
+    renderRequests();
+  });
 }
 
 async function renderRequests() {
   const token = bumpNav();
   currentSection = "requests";
   if (reqOpen) return renderRequestCard(token);
-  const [list, dirs] = await Promise.all([api("/api/requests"), api("/api/directory")]);
+  const [list, dirs] = await Promise.all([api("/api/requests?scope=" + reqScope), api("/api/directory")]);
   if (!alive(token)) return;
   const managers = asList(dirs.managers);
   const clients = asList(dirs.clients);
   const cps = asList(dirs.counterparties);
   const emp = me && me.employee;
+  const requests = asList(list).filter((r) => r.status !== "deleted");
   page("Заявки", `
+    <div class="row"><button class="btn ${reqScope === "mine" ? "primary" : ""}" data-reqscope="mine">Мои заявки</button><button class="btn ${reqScope === "all" ? "primary" : ""}" data-reqscope="all">Все заявки</button></div>
+    ${requestFilterButtons(requests)}
     <div class="card">
-      <p class="hint">Номер можно вписать самому. Если поле пустое — уйдёт сам: две буквы + номер сотрудника + месяц без нуля (1,2,3…10) + порядковый. Пример ЖЖ01552. Удалить или вернуть заявку может только тот, кто её отправил.</p>
+      <p class="hint">Номер можно вписать самому. Если поле пустое — уйдёт сам: две буквы + номер сотрудника + месяц без нуля (1,2,3…10) + порядковый. Пример ЖЖ01552. Изменять заявку может назначенный сотрудник или администратор.</p>
       ${emp ? `<div class="meta">Вы сотрудник: ${esc(emp.name)}${emp.number ? " · № " + esc(emp.number) : " · нет номера"}${emp.title ? " · " + esc(emp.title) : ""}</div>` : (isAdmin() ? `<div class="meta">Админ может всё без карточки сотрудника. В автономере будет 00.</div>` : `<div class="meta">Вас ещё нет в Справочник → Сотрудники. Владелец выбирает вас из Доступов.</div>`)}
       <input id="reqUID" placeholder="Номер заявки (если пусто — сам)" autocomplete="off" inputmode="text">
       <input id="reqTitle" placeholder="Комментарий (необязательно)">
@@ -1711,24 +1781,14 @@ async function renderRequests() {
       <select id="reqCP"><option value="">Контрагент</option>${optList(cps, (c) => c.work_id || "")}</select>
       <button class="btn primary" id="reqCreate">Создать заявку</button>
     </div>
-    ${asList(list).map((r) => `
-      <div class="card">
-        <h3>${esc(r.uid)} <span class="badge">${esc(r.status)}</span> ${payBadge(r.payment_status)}</h3>
-        ${r.title && r.title !== r.uid ? `<p>${esc(r.title)}</p>` : ""}
-        <div class="meta">${esc(fmtWhen(r.created_at))}${r.files_count ? " · файлов: " + r.files_count : ""}${r.messages_count ? " · сообщ.: " + r.messages_count : ""}</div>
-        ${reqPeople(r)}
-        <div class="kb">
-          <button type="button" class="kb-btn wide acc" data-opendocs="${r.id}"><b>Файлы и сообщения</b><span class="meta">${r.files_count || r.messages_count ? ((r.files_count || 0) + " файлов · " + (r.messages_count || 0) + " сообщ.") : "Переслать из Telegram в эту сделку"}</span></button>
-        </div>
-         <div class="row wrap">
-           <button class="btn primary" data-openreq="${r.id}">Открыть</button>
-           <button class="btn" data-arc="${r.id}">Сохранить в документы</button>
-         </div>
-         ${reqStatusBtns(r)}
-
-        ${reqUndoRow(r)}
-      </div>`).join("") || `<p class="empty">Пока нет заявок</p>`}
+    <div id="requestList"></div>
   `);
+  renderRequestList(requests);
+  app.querySelectorAll("[data-reqscope]").forEach(b => b.onclick = () => { reqScope = b.dataset.reqscope; renderRequests(); });
+  app.querySelectorAll("[data-reqfilter]").forEach((button) => button.onclick = () => {
+    if(button.checked)reqStatuses.add(button.dataset.reqfilter);else reqStatuses.delete(button.dataset.reqfilter);
+    renderRequestList(requests);
+  });
   $("reqCreate").onclick = async () => {
     try {
       const out = await api("/api/requests", { method: "POST", body: JSON.stringify({
@@ -1738,36 +1798,19 @@ async function renderRequests() {
         client_id: Number($("reqClient").value) || 0,
         counterparty_id: Number($("reqCP").value) || 0
       }) });
+      reqFilter = "open";
+      reqStatuses.add("open");
       toast(out && out.uid ? ("Заявка " + out.uid) : "Заявка создана");
       renderRequests();
     } catch (e) { toast(e.message); }
   };
-  app.querySelectorAll("[data-openreq]").forEach((b) => b.onclick = (e) => {
-    e.stopPropagation();
-    reqOpen = Number(b.dataset.openreq);
-    reqPane = "";
-    buzz();
-    renderRequests();
-  });
-  app.querySelectorAll("[data-opendocs]").forEach((b) => b.onclick = (e) => {
-    e.stopPropagation();
-    reqOpen = Number(b.dataset.opendocs);
-    reqPane = "docs";
-    buzz();
-    renderRequests();
-  });
-  app.querySelectorAll("[data-arc]").forEach((b) => b.onclick = (e) => {
-    e.stopPropagation();
-    showArchiveModal(Number(b.dataset.arc));
-  });
-  bindStatus("/api/requests");
-  bindUndo();
 }
 
 async function renderRequestCard(token) {
   const b = await api("/api/requests?id=" + reqOpen);
   if (token != null && !alive(token)) return;
   const r = b;
+  if (!r.can_edit && reqPane !== "docs") reqPane = "";
   if (reqPane === "pay") return renderPayPane(r);
   if (reqPane === "docs") return await renderDocsPane(r);
   if (reqPane === "appeal" || reqPane === "appeal_docs" || reqPane === "appeal_lawyer") return renderAppealPane(r);
@@ -1775,14 +1818,18 @@ async function renderRequestCard(token) {
   const lastPay = pays[0];
   page(r.uid || r.title || "Заявка", `
     <div class="card">
-      <h3>${esc(r.uid || r.title)} <span class="badge">${esc(r.status)}</span> ${payBadge(r.payment_status)} ${aprBadge(r.approvals)}</h3>
-      ${r.title && r.title !== r.uid ? `<p>${esc(r.title)}</p>` : ""}
+      <h3>${esc(r.uid || r.title)} <span class="badge">${requestStatusLabel(r)}</span> ${payBadge(r.payment_status)} ${aprBadge(r.approvals)}</h3>
+      ${r.comment ? `<p>${esc(r.comment)}</p>` : ""}
+      ${r.close_reason?`<p>Причина: ${esc(r.close_reason)}</p>`:""}
+      ${!r.can_edit?`<p class="badge">Только просмотр</p>`:""}
       ${reqPeople(r)}
+      <p>Этап: ${esc(({approval:"Согласование",payment:"Оплата",task:"Задача",appeal:"Обращение",complete:"Завершено"})[r.workflow_stage]||r.workflow_stage||"")}</p>
+      ${isAdmin()&&r.status==="in_progress"&&r.workflow_stage!=="complete"?'<button class="btn" id="skipStage">Пропустить этап</button>':""}
       <p class="hint">Контекст заявки наследуется: сальдо, согласование, оплата, документы и обращения не заполняют ФИО заново.</p>
     </div>
     <div class="kb">
       <button type="button" class="kb-btn wide acc" id="rqDocs"><b>Файлы и сообщения</b><span class="meta">${(r.files_count || 0) + (r.messages_count || 0) ? ((r.files_count || 0) + " файлов · " + (r.messages_count || 0) + " сообщ.") : "Переслать из Telegram. В таблицу не уходит."}</span></button>
-      <button type="button" class="kb-btn" id="rqSaldo"><b>Сальдо</b><span class="meta">Постановка по этой заявке</span></button>
+      
       <button type="button" class="kb-btn" id="rqApr"><b>Согласование</b><span class="meta">В очередь админу</span></button>
       <button type="button" class="kb-btn" id="rqPay"><b>Оплата</b><span class="meta">Что отправить → Отправка</span></button>
       <button type="button" class="kb-btn" id="rqTask"><b>Ещё задача</b><span class="meta">В канбан с новым номером</span></button>
@@ -1790,9 +1837,13 @@ async function renderRequestCard(token) {
     </div>
       <div class="row wrap">
         <button class="btn" data-dsp="requests" data-uid="${esc(r.uid)}">Спор</button>
-        <button class="btn primary" data-arc="${r.id}">Сохранить в документы</button>
       </div>
       ${reqStatusBtns(r)}
+      <div class="card"><h3>Экономика сделки</h3><p>Продажа: ${esc(r.economics?.client_sale?.value||"—")} ${esc(r.economics?.client_sale?.currency||"")}</p>
+      <p>Комиссия контрагента: ${esc(r.economics?.counterparty_commission?.value||"—")} ${esc(r.economics?.counterparty_commission?.type==="percent"?"%":r.economics?.counterparty_commission?.currency||"")}</p>
+      <p>Комиссия агента: ${esc(r.economics?.agent_commission?.value||"—")}</p>
+      <p>Прибыль: ${esc(r.economics?.profit?.value||"—")} ${esc(r.economics?.profit?.currency||"")}</p>
+      ${r.can_edit&&["open","in_progress"].includes(r.status)?'<button class="btn" id="editEconomics">Изменить экономику</button>':""}</div>
 
     ${reqUndoRow(r)}
     ${asList(r.approvals).map((a) => `
@@ -1800,42 +1851,68 @@ async function renderRequestCard(token) {
         <div class="meta">Согласование</div>
         <h3>${esc(a.status)}</h3>
         <div class="meta">${esc(a.manager_name)} · ${esc(fmtWhen(a.created_at))}</div>
-        ${aprUndoRow(a)}
+        ${aprUndoRow(a)}${deliveryHTML(a,"approval")}
       </div>`).join("")}
     ${lastPay ? `<div class="card"><div class="meta">Оплата</div><h3>${esc(lastPay.status === "sent" ? "Отправлено" : "Ждёт отправки")}</h3><p>${esc(lastPay.text)}</p><div class="meta">${esc(fmtWhen(lastPay.created_at))}${lastPay.sent_at ? " · отправлено " + esc(fmtWhen(lastPay.sent_at)) : ""}</div>
-      ${payUndoRow(lastPay)}
+      ${payUndoRow(lastPay)}${deliveryHTML(lastPay,"payment")}
     </div>` : ""}
   `);
-  $("rqSaldo").onclick = () => {
-    saldoFromRequest = true;
-    saldoTab = "op";
-    saldoDraft = {
-      cp: r.counterparty_name || "",
-      kind: "", action: "", currency: "",
-      requestId: r.id,
-      counterpartyId: r.counterparty_id || 0,
-      reqTitle: r.title || ""
-    };
-    buzz();
-    openSection("saldo");
+  const workflowNames={approval:"согласование",payment:"оплату",task:"задачу",appeal:"обращение",complete:"все этапы"};
+  const requireWorkflowStage=(stage)=>{
+    if(r.status!=="in_progress"){
+      toast(r.status==="open"?"Сначала начните с согласования — заявка перейдёт в работу":"Заявка уже закрыта");
+      return false;
+    }
+    const current=r.workflow_stage||"approval";
+    if(current!==stage){
+      toast(current==="complete"?"Все этапы уже завершены":`Сейчас нужно завершить ${workflowNames[current]||"текущий этап"}`);
+      return false;
+    }
+    return true;
   };
   $("rqApr").onclick = async () => {
     try {
+      if(r.status==="open"){
+        const updated=await api("/api/requests",{method:"POST",body:JSON.stringify({id:r.id,status:"in_progress"})});
+        r.status=updated.status||"in_progress";
+        r.workflow_stage=updated.workflow_stage||r.workflow_stage||"approval";
+      }
+      if(!requireWorkflowStage("approval"))return;
       await api("/api/approvals", { method: "POST", body: JSON.stringify({ request_id: r.id }) });
       toast("Отправлено на согласование");
       if (has("approvals")) { aprTab = "queue"; openSection("approvals"); }
       else renderRequests();
     } catch (e) { toast(e.message); }
   };
-  $("rqPay").onclick = () => { reqPane = "pay"; renderRequests(); };
+  $("rqPay").onclick = () => { if(!requireWorkflowStage("payment"))return;reqPane = "pay"; renderRequests(); };
   $("rqDocs").onclick = () => { reqPane = "docs"; renderRequests(); };
   $("rqTask").onclick = () => {
+    if(!requireWorkflowStage("task"))return;
     taskForm = true;
     taskDraft = { requestId: r.id, title: "", text: "" };
     buzz();
     openSection("tasks");
   };
-  $("rqAppeal").onclick = () => { reqPane = "appeal"; renderRequests(); };
+  $("rqAppeal").onclick = () => { if(!requireWorkflowStage("appeal"))return;reqPane = "appeal"; renderRequests(); };
+  const stages={rqApr:"approval",rqPay:"payment",rqTask:"task",rqAppeal:"appeal"};
+  Object.entries(stages).forEach(([id,stage])=>{const el=$(id);if(!el)return;const current=r.workflow_stage||"approval";el.title=r.status==="open"&&stage==="approval"?"Начать согласование и перевести заявку в работу":r.status!=="in_progress"?"Заявка закрыта":current===stage?"Доступно сейчас":`Сначала завершите: ${workflowNames[current]||"текущий этап"}`;});
+  if($("skipStage"))$("skipStage").onclick=async()=>{const reason=prompt("Причина пропуска этапа");if(!reason||!reason.trim())return;try{await api("/api/requests",{method:"POST",body:JSON.stringify({id:r.id,action:"skip_stage",close_reason:reason})});renderRequests();}catch(e){toast(e.message);}};
+  if (!r.can_edit) {
+    app.querySelectorAll("#rqSaldo,#rqApr,#rqPay,#rqTask,#rqAppeal,[data-dsp],[data-delapr],[data-retapr],[data-delpay],[data-retpay]").forEach(el => el.remove());
+  }
+  const editComment = $("reqEditComment");
+  if (editComment) editComment.onclick = () => {
+    const dialog = archiveDialog("Комментарий заявки");
+    const body = dialog.querySelector(".archive-body");
+    body.innerHTML = `<textarea id="requestComment"></textarea><button class="btn primary">Сохранить</button>`;
+    body.querySelector("textarea").value = r.comment || "";
+    body.querySelector("button").onclick = async () => {
+      try { await api("/api/requests", {method:"POST",body:JSON.stringify({action:"edit_comment",id:r.id,comment:body.querySelector("textarea").value})}); dialog.close(); renderRequests(); }
+      catch(e) { toast(e.message); }
+    };
+  };
+  if($("editEconomics"))$("editEconomics").onclick=()=>editEconomics(r);
+  bindDeliveryRetry();
   bindStatus("/api/requests");
   bindDispute();
   bindUndo();
@@ -1993,7 +2070,10 @@ async function renderDocsPane(r) {
   });
   bindUndo();
   fillFilePreviews();
-  if (waiting) startDocsPoll(files.length);
+  if (!r.can_edit) {
+    app.querySelectorAll("#docTg,#docTgStop,#docUndo,#docClear,#docMsgBtn,#docNote,[data-delfile],[data-togs]").forEach(el => {const card=el.closest(".card");if(card && (el.id==="docTg"||el.id==="docMsgBtn"))card.remove();else el.remove();});
+  }
+  if (waiting && r.can_edit) startDocsPoll(files.length);
 }
 
 async function renderTasks() {
@@ -2495,8 +2575,8 @@ async function renderSaldo() {
       <div class="card" id="cpDetail"><p class="meta">Выберите контрагента</p></div>`;
   } else {
     body = `<div class="card">
-      <p class="meta">Файлы придут вам в личку с ботом Mini App, не скачиваются здесь.</p>
-      <button class="btn primary" id="sSendFiles">Отправить файлы в личку</button>
+      <p class="meta">Файлы будут отправлены в настроенную группу сальдо.</p>
+      <button class="btn primary" id="sSendFiles">Отправить файлы в чат сальдо</button>
       <p class="meta" id="sFilesMsg"></p>
     </div>`;
   }
@@ -2560,8 +2640,8 @@ async function renderSaldo() {
     try {
       await api("/api/saldo", { method: "POST", body: JSON.stringify({ send_files: true }) });
       const msg = $("sFilesMsg");
-      if (msg) msg.textContent = "Файлы отправлены вам в личку с ботом.";
-      toast("Файлы отправлены в личку");
+      if (msg) msg.textContent = "Файлы отправлены в чат сальдо.";
+      toast("Файлы отправлены в чат сальдо");
     } catch (e) { alert(e.message); }
   };
 }
@@ -2571,17 +2651,18 @@ async function renderRates() {
   page("Курсы", `<p class="meta">Загрузка…</p>`, token);
   const s = await api("/api/rates");
   if (!alive(token)) return;
-  const line = (label, v, err) => `<div class="card"><h3>${esc(label)}</h3><div class="amt">${err ? esc(err) : v}</div></div>`;
-  page("Курсы", `<button class="btn fold" id="rReload">Обновить курсы</button>` + [
+  const line = (label, v, err) => `<div class="card"><h3>${esc(label)}</h3><div class="rate-list">${(err ? [err] : Array.isArray(v) ? v : [v ?? "—"]).map(value => `<div class="amt rate-item">${esc(value)}</div>`).join("")}</div></div>`;
+  page("Курсы", `${isAdmin()?'<button class="btn" id="rateSettings">⚙ Настроить верхние курсы</button>':""}<div class="custom-rates">${asList(s.custom_slots).map(v=>line(v.label||v.source+" "+v.symbol,v.value,v.error)).join("")}</div><button class="btn fold" id="rReload">Обновить курсы</button>` + [
     line("Rapira USDT/RUB", s.rapira, s.rapira_err),
-    line("ЦБ " + (s.cbr_date || ""), (s.cbr || []).map((x) => x.code + " " + x.per_unit).join(" · "), s.cbr_err),
-    line("ProFinance руб", (s.rub || []).map((x) => x.pair + " " + x.bid).join(" · "), s.pf_err),
-    line("ProFinance forex", (s.forex || []).map((x) => x.pair + " " + x.bid).join(" · "), s.pf_err),
+    line("ЦБ " + (s.cbr_date || ""), (s.cbr || []).map((x) => x.code + " " + x.per_unit), s.cbr_err),
+    line("ProFinance руб", (s.rub || []).map((x) => x.pair + " " + x.bid), s.pf_err),
+    line("ProFinance forex", (s.forex || []).map((x) => x.pair + " " + x.bid), s.pf_err),
     line("XE EUR/USD", s.xe_eurusd, s.xe_err),
     line("Investing USD/RUB", s.investing, s.investing_err),
   ].join(""), token);
   if (!alive(token)) return;
   $("rReload").onclick = () => renderRates();
+  if($("rateSettings")) $("rateSettings").onclick=editRateSlots;
 }
 
 async function renderHolidays() {
@@ -2683,10 +2764,11 @@ async function renderDocuments() {
   const fileCards = files.map((f) => `
     <div class="card">
       ${isImageFile(f) ? `<img class="doc-preview" alt="" data-vpreview="${f.id}">` : ""}
-      <h3>${esc(f.name || "Файл")}</h3>
+      <h3>${f.request_id ? "📁 " + esc(f.request_uid) + " · " + esc(f.request_title || "Заявка") : esc(f.name || "Файл")}</h3>
       <div class="meta">${esc(f.created_name)} · ${esc(fmtWhen(f.created_at))}${f.size ? " · " + fmtSize(f.size) : ""}</div>
       <div class="row wrap">
-        <button class="btn" data-vdl="${f.id}" data-name="${esc(f.name)}">Скачать</button>
+        <button class="btn" data-vopen="${f.id}" data-archive="${f.request_id ? "1" : ""}" data-name="${esc(f.name)}">Открыть</button>
+        <button class="btn" data-vdl="${f.id}" data-name="${esc(f.name)}">${f.request_id ? "Скачать всё ZIP" : "Скачать"}</button>
         <button type="button" class="btn" data-vtogs="${f.id}">Себе в личку</button>
         ${(f.mine || canEdit) ? `<button type="button" class="btn bad" data-vdel="${f.id}">Удалить</button>` : ""}
       </div>
@@ -2749,6 +2831,10 @@ async function renderDocuments() {
       } catch (e) { toast(e.message); }
     };
     if (waiting) startVaultPoll(files.length, qstr);
+    app.querySelectorAll("[data-vopen]").forEach((b) => b.onclick = () => {
+      if (b.dataset.archive) showSavedRequest(Number(b.dataset.vopen), renderDocuments);
+      else previewVaultFile(Number(b.dataset.vopen), b.dataset.name);
+    });
     app.querySelectorAll("[data-vdl]").forEach((b) => {
       b.onclick = async (e) => {
         e.preventDefault();
@@ -2765,7 +2851,7 @@ async function renderDocuments() {
     });
     app.querySelectorAll("[data-vdel]").forEach((b) => {
       b.onclick = async () => {
-        const ok = await ask("Удалить этот файл?");
+        const ok = await ask("Удалить документ? Сохранённая заявка удаляется целиком с копиями вложений. Исходные данные останутся.");
         if (!ok) return;
         try {
           await api("/api/documents?id=" + b.dataset.vdel, { method: "DELETE" });
@@ -3319,11 +3405,13 @@ async function renderDisputes() {
 function bindStatus(path) {
   app.querySelectorAll("[data-st]").forEach((b) => b.onclick = async () => {
     const body = { id: Number(b.dataset.st), status: b.dataset.v };
-    if (path === "/api/requests" && b.dataset.v === "done") {
-      body.table_ref = "row:" + b.dataset.st;
+    if (path === "/api/requests" && body.status === "failed") {
+      const reason = prompt("Почему сделка не состоялась? Обязательная причина:");
+      if (!reason || !reason.trim()) return;
+      body.close_reason = reason.trim();
     }
-    await api(path, { method: "POST", body: JSON.stringify(body) });
-    openSection(path.split("/").pop());
+    try { await api(path, { method: "POST", body: JSON.stringify(body) }); openSection(path.split("/").pop()); }
+    catch(e) { toast(e.message); }
   });
 }
 
@@ -3380,7 +3468,7 @@ function launchGo() {
     try { go = (tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || ""; } catch (_) {}
   }
   go = String(go || "").toLowerCase().trim();
-  const allow = { requests: 1, tasks: 1, saldo: 1, approvals: 1, payments: 1, directory: 1 };
+  const allow = { meetings:1, analytics:1, rates:1, documents:1, requests: 1, tasks: 1, saldo: 1, approvals: 1, payments: 1, directory: 1 };
   if (!allow[go]) return false;
   openSection(go);
   return true;
@@ -3400,3 +3488,106 @@ function launchGo() {
     app.innerHTML = `<p class="err">Откройте приложение из главного бота Telegram. ${esc(e.message)}</p>`;
   }
 })();
+
+
+async function openSectionSettings(scope) {
+  try {
+    const [settings,chatPack]=await Promise.all([api("/api/app-settings"),api("/api/chats")]);
+    const chats=asList(chatPack.items);
+    const dialog=archiveDialog("Настройки чата · "+({approval:"Согласование",payment:"Отправка",saldo:"Сальдо"}[scope]));
+    const box=dialog.querySelector(".archive-body");
+    const selected=Number(settings[scope+"_chat_id"]||0);
+    box.innerHTML=`${chats.length?`<label>Группа из раздела «Чаты»<select id="sectionChat"><option value="0">Не выбрана</option>${chats.map(c=>`<option value="${c.chat_id}" ${Number(c.chat_id)===selected?"selected":""}>${esc(c.name)}</option>`).join("")}</select></label><button class="btn primary" id="sectionChatSave">Сохранить</button>`:`<p class="hint">Сначала добавьте группу в разделе «Чаты».</p>`}<button class="btn" id="sectionChatOpen">Открыть Чаты</button>`;
+    const save=$("sectionChatSave");if(save)save.onclick=async()=>{
+      try {const chatID=Number($("sectionChat").value);if(!Number.isSafeInteger(chatID)||chatID>0)throw Error("Выберите группу из раздела «Чаты»");
+        await api("/api/app-settings",{method:"POST",body:JSON.stringify({scope,chat_id:chatID})});dialog.close();toast("Настройка сохранена");
+      } catch(e){toast(e.message);}
+    };
+    $("sectionChatOpen").onclick=()=>{dialog.close();openSection("chats");};
+  }catch(e){toast(e.message);}
+}
+
+let meetingFilter="upcoming";
+async function renderMeetings() {
+  const token=bumpNav(); currentSection="meetings";
+  const list=asList(await api("/api/meetings?filter="+meetingFilter));if(!alive(token))return;
+  page("Встречи",`<div class="row wrap">${[["upcoming","Предстоящие"],["past","Прошедшие"],["all","Все"]].map(([k,v])=>`<button class="btn ${k===meetingFilter?"primary":""}" data-meeting-filter="${k}">${v}</button>`).join("")}</div>
+    <button class="btn primary" id="meetingCreate">Добавить встречу</button>
+    ${list.map(m=>`<div class="card"><h3>${esc(m.title)}</h3><p>${esc(new Date(m.starts_at).toLocaleString("ru-RU",{timeZone:"Europe/Moscow"}))} МСК</p>
+      <a class="btn" href="${esc(m.url)}" target="_blank" rel="noopener noreferrer">Открыть встречу</a>
+      ${isAdmin()||isMine(m.created_by)?`<button class="btn" data-meeting-edit="${m.id}">Изменить</button><button class="btn bad" data-meeting-delete="${m.id}">Удалить</button>`:""}</div>`).join("") || `<p class="hint">Встреч нет</p>`}`,token);
+  app.querySelectorAll("[data-meeting-filter]").forEach(b=>b.onclick=()=>{meetingFilter=b.dataset.meetingFilter;renderMeetings();});
+  $("meetingCreate").onclick=()=>editMeeting({});
+  app.querySelectorAll("[data-meeting-edit]").forEach(b=>b.onclick=()=>editMeeting(list.find(m=>m.id===Number(b.dataset.meetingEdit))));
+  app.querySelectorAll("[data-meeting-delete]").forEach(b=>b.onclick=async()=>{if(!await ask("Удалить встречу?"))return;try{await api("/api/meetings?id="+b.dataset.meetingDelete,{method:"DELETE"});renderMeetings();}catch(e){toast(e.message);}});
+}
+function editMeeting(m) {
+  const dialog=archiveDialog(m.id?"Изменить встречу":"Новая встреча");const box=dialog.querySelector(".archive-body");
+  const local=m.starts_at?new Date(new Date(m.starts_at).getTime()+3*3600000).toISOString().slice(0,16):"";
+  box.innerHTML=`<form><label>Название<input name="title" required value="${esc(m.title||"")}"></label><label>Ссылка<input name="url" type="url" required value="${esc(m.url||"")}"></label><label>Дата и время по Москве<input name="starts" type="datetime-local" required value="${local}"></label><button class="btn primary">Сохранить</button></form>`;
+  box.querySelector("form").onsubmit=async e=>{e.preventDefault();const f=e.target.elements;try{await api("/api/meetings",{method:"POST",body:JSON.stringify({id:m.id||0,title:f.title.value,url:f.url.value,starts_at:f.starts.value+":00+03:00"})});dialog.close();renderMeetings();}catch(err){toast(err.message);}};
+}
+
+async function editRateSlots(){
+  try{
+    const [opts,settings]=await Promise.all([api("/api/rates/options"),api("/api/app-settings")]);
+    const dialog=archiveDialog("Три верхних курса");const box=dialog.querySelector(".archive-body");
+    const slots=settings.custom_rate_slots||[{}, {}, {}];
+    box.innerHTML=slots.map((v,i)=>`<fieldset data-rate-slot><legend>Курс ${i+1}</legend><label><input type="checkbox" ${v.enabled?"checked":""}>Включён</label><select>${opts.map(o=>`<option value="${esc(o.source+"|"+o.symbol)}" ${v.source===o.source&&v.symbol===o.symbol?"selected":""}>${esc(o.source+" · "+o.symbol)}</option>`).join("")}</select><input type="text" placeholder="Название" value="${esc(v.label||"")}"></fieldset>`).join("")+`<button class="btn primary">Сохранить</button>`;
+    box.querySelector("button").onclick=async()=>{try{const slots=Array.from(box.querySelectorAll("fieldset")).map(el=>{const [source,symbol]=el.querySelector("select").value.split("|");return {enabled:el.querySelector('[type="checkbox"]').checked,source,symbol,label:el.querySelector('[type="text"]').value};});await api("/api/rates/config",{method:"POST",body:JSON.stringify({slots})});dialog.close();renderRates();}catch(e){toast(e.message);}};
+  }catch(e){toast(e.message);}
+}
+
+async function editMonthlyArchive(){
+  try{
+    const data=await api("/api/archive-settings"),v=data.settings||{};
+    const labels={requests:"Заявки",approvals:"Согласования",saldo:"Сальдо",payments:"Отправка",tasks:"Задачи",appeals:"Обращения",directory:"Справочники",meetings:"Встречи",balances:"Балансы",compliance:"Комплаенс",disputes:"Споры",documents:"Документы",activity:"Активность",audit:"Журнал изменений"};
+    const d=archiveDialog("Автосохранение Mini App"),box=d.querySelector(".archive-body");
+    box.innerHTML=`<form><label><input name="enabled" type="checkbox" ${v.enabled?"checked":""}>Ежемесячное сохранение</label><label>День месяца<input name="day" type="number" min="1" max="31" required value="${v.day||1}"></label><label>Время по Москве<input name="time" type="time" required value="${esc(v.time_hhmm||"23:00")}"></label><div class="checks">${data.sections.map(k=>`<label><input type="checkbox" data-section="${k}" ${(v.sections||[]).includes(k)?"checked":""}>${labels[k]||k}</label>`).join("")}</div><label><input name="files" type="checkbox" ${v.include_files?"checked":""}>Включить файлы выбранных разделов</label><p class="hint">Если выбранного дня нет — последний день месяца. Архивы хранятся до ручного удаления.</p><button class="btn primary">Сохранить настройки</button><button type="button" class="btn" id="snapshotNow">Сохранить сейчас</button><p role="status"></p></form>`;
+    const form=box.querySelector("form");
+    const save=()=>api("/api/archive-settings",{method:"POST",body:JSON.stringify({enabled:form.elements.enabled.checked,day:Number(form.elements.day.value),time_hhmm:form.elements.time.value,include_files:form.elements.files.checked,sections:Array.from(box.querySelectorAll("[data-section]:checked")).map(el=>el.dataset.section)})});
+    form.onsubmit=async e=>{e.preventDefault();try{await save();toast("Расписание сохранено");}catch(err){toast(err.message);}};
+    box.querySelector("#snapshotNow").onclick=async e=>{e.target.disabled=true;try{await save();const f=await api("/api/archive-now",{method:"POST",body:"{}"});box.querySelector('[role="status"]').textContent="Сохранено: "+f.name;toast("Архив в Документы → Прочее");}catch(err){toast(err.message);}finally{e.target.disabled=false;}};
+  }catch(e){toast(e.message);}
+}
+
+function deliveryHTML(v,kind){
+ if(!v.delivery_status)return "";
+ return `<p class="meta">Telegram: ${esc(({sent:"Доставлено",pending:"Ожидает доставки",error:"Не доставлено"})[v.delivery_status]||v.delivery_status)}</p>${v.delivery_error?`<p class="err">${esc(v.delivery_error)}</p>`:""}${isAdmin()&&v.delivery_status!=="sent"?`<button class="btn" data-delivery-kind="${kind}" data-delivery-id="${v.id}">Повторить отправку</button>`:""}`;
+}
+function bindDeliveryRetry(){app.querySelectorAll("[data-delivery-id]").forEach(b=>b.onclick=async()=>{b.disabled=true;try{await api("/api/"+(b.dataset.deliveryKind==="approval"?"approvals":"payments"),{method:"POST",body:JSON.stringify({action:"retry_delivery",id:Number(b.dataset.deliveryId)})});openSection(currentSection);}catch(e){toast(e.message);b.disabled=false;}});}
+
+async function editEconomics(r){
+ try{const agents=asList(await api("/api/agents")),e=r.economics||{},sale=e.client_sale||{},profit=e.profit||{};
+ const d=archiveDialog("Экономика сделки"),box=d.querySelector(".archive-body");
+ const commission=(key,label)=>{const c=e[key]||{};return `<fieldset data-commission="${key}"><legend>${label}</legend><select><option value="fixed">Сумма</option><option value="percent" ${c.type==="percent"?"selected":""}>Процент</option></select><input data-value inputmode="decimal" placeholder="Значение" value="${esc(c.value||"")}"><input data-currency placeholder="Валюта, например RUB" value="${esc(c.currency||"")}"></fieldset>`;};
+ box.innerHTML=`<form>${commission("counterparty_commission","Комиссия контрагента")}<label>Агент<select name="agent"><option value="0">Нет агента</option>${agents.map(a=>`<option value="${a.id}" ${a.id===r.agent_id?"selected":""}>${esc(a.name)}</option>`).join("")}</select></label>${commission("agent_commission","Комиссия агента")}<fieldset><legend>Продажа клиенту</legend><input name="sale" inputmode="decimal" placeholder="Сумма" value="${esc(sale.value||"")}"><input name="currency" placeholder="Валюта" value="${esc(sale.currency||"")}"><input name="rate" inputmode="decimal" placeholder="Курс" value="${esc(sale.rate||"")}"><textarea name="description" placeholder="Условия продажи">${esc(sale.description||"")}</textarea></fieldset><fieldset><legend>Прибыль вручную</legend><input name="profit" inputmode="decimal" placeholder="Сумма, убыток со знаком минус" value="${esc(profit.value||"")}"><input name="profit_currency" placeholder="Валюта, например RUB" value="${esc(profit.currency||"")}"></fieldset><button class="btn primary">Сохранить</button></form>`;
+ box.querySelector("form").onsubmit=async event=>{event.preventDefault();const f=event.target.elements,economics={client_sale:{value:f.sale.value.trim(),currency:f.currency.value.trim().toUpperCase(),rate:f.rate.value.trim(),description:f.description.value},profit:{value:f.profit.value.trim(),currency:f.profit_currency.value.trim().toUpperCase()}};
+ box.querySelectorAll("[data-commission]").forEach(el=>economics[el.dataset.commission]={type:el.querySelector("select").value,value:el.querySelector("[data-value]").value.trim(),currency:el.querySelector("[data-currency]").value.trim().toUpperCase()});
+ try{await api("/api/requests",{method:"POST",body:JSON.stringify({id:r.id,action:"economics",agent_id:Number(f.agent.value),economics})});d.close();renderRequests();}catch(e){toast(e.message);}};
+ }catch(e){toast(e.message);}
+}
+async function showAgents(){
+ try{const agents=asList(await api("/api/agents"));const d=archiveDialog("Агенты"),box=d.querySelector(".archive-body");
+ box.innerHTML=`<form><input name="name" placeholder="Имя агента" required><input name="work" placeholder="Рабочий ID"><button class="btn primary">Добавить</button></form>${agents.map(a=>`<div class="card"><b>${esc(a.name)}</b><p>${esc(a.work_id||"")}</p>${isAdmin()?`<button class="btn" data-agent-edit="${a.id}">Изменить</button>`:""}</div>`).join("")}`;
+ const form=box.querySelector("form");let editID=0;box.querySelectorAll("[data-agent-edit]").forEach(b=>b.onclick=()=>{const a=agents.find(a=>a.id===Number(b.dataset.agentEdit));editID=a.id;form.elements.name.value=a.name;form.elements.work.value=a.work_id;form.querySelector("button").textContent="Сохранить";});
+ form.onsubmit=async e=>{e.preventDefault();try{await api("/api/agents",{method:"POST",body:JSON.stringify({id:editID,name:form.elements.name.value,work_id:form.elements.work.value})});d.close();showAgents();}catch(err){toast(err.message);}};
+ }catch(e){toast(e.message);}
+}
+
+let analyticsDimension="employee",analyticsMetric="requests";
+let analyticsFrom=new Date().toLocaleDateString("sv-SE",{timeZone:"Europe/Moscow"}).slice(0,8)+"01";
+let analyticsTo=new Date().toLocaleDateString("sv-SE",{timeZone:"Europe/Moscow"});
+async function renderAnalytics(){
+ const token=bumpNav();currentSection="analytics";
+ page("Бухгалтерия и аналитика",`<div class="card"><label>Объект<select id="analyticsDimension">${[["employee","Сотрудник"],["client","Клиент"],["counterparty","Контрагент"],["agent","Агент"]].map(([k,v])=>`<option value="${k}" ${k===analyticsDimension?"selected":""}>${v}</option>`).join("")}</select></label><label>С<input id="analyticsFrom" type="date" value="${analyticsFrom}"></label><label>По<input id="analyticsTo" type="date" value="${analyticsTo}"></label><label>Анализ<select id="analyticsMetric">${[["requests","Заявки"],["conversion","Успешность"],["sales","Оборот"],["commissions","Комиссии"],["activity","Активность"],["profit","Прибыль"]].map(([k,v])=>`<option value="${k}" ${k===analyticsMetric?"selected":""}>${v}</option>`).join("")}</select></label><button class="btn primary" id="analyticsRun">Показать</button></div><div id="analyticsResult"></div>`,token);
+ $("analyticsRun").onclick=async()=>{analyticsDimension=$("analyticsDimension").value;analyticsMetric=$("analyticsMetric").value;analyticsFrom=$("analyticsFrom").value;analyticsTo=$("analyticsTo").value;try{
+ const data=await api(`/api/analytics?dimension=${analyticsDimension}&from=${analyticsFrom}&to=${analyticsTo}`);if(!alive(token))return;
+ const money=m=>Object.entries(m||{}).map(([cur,v])=>esc(v+" "+cur)).join(" · ")||"—";
+ $("analyticsResult").innerHTML=`<p class="hint">${esc(data.period_basis)}. ${esc(data.currency_policy)}.</p>`+asList(data.rows).map(v=>`<div class="card"><h3>${esc(v.name)}</h3>${analyticsMetric==="requests"?`<p>Заявок: ${v.requests} · В работе: ${v.in_progress} · Успешных: ${v.successful} · Не состоялись: ${v.failed}</p>`:analyticsMetric==="conversion"?`<p>Успешность завершённых: ${Number(v.conversion).toFixed(1)}%</p><p>Среднее время закрытия: ${v.average_close_hours==null?"нет данных":Number(v.average_close_hours).toFixed(1)+" ч"}</p>`:analyticsMetric==="sales"?`<p>${money(v.sales)}</p>`:analyticsMetric==="commissions"?`<p>Контрагент: ${money(v.counterparty_commission)}</p><p>Агент: ${money(v.agent_commission)}</p><p>Напоминаний о комиссии клиента: ${v.client_commission_reminders||0}</p>${v.percentage_terms?'<p class="hint">Процентные комиссии не пересчитаны: требуется правило базы расчёта.</p>':""}`:analyticsMetric==="profit"?`<p>${money(v.profit)}</p><p class="hint">${esc(data.profit_note)}</p>`:`<p>Активность в Mini App: ${Number(v.activity_hours).toFixed(2)} ч</p>`}</div>`).join("")||"Нет данных за период";
+ }catch(e){toast(e.message);}};
+ $("analyticsRun").click();
+}
+let lastAppInteraction=0;
+for(const type of ["pointerdown","keydown","touchstart"])document.addEventListener(type,()=>{lastAppInteraction=Date.now();},{passive:true});
+setInterval(()=>{if(me&&document.visibilityState==="visible"&&Date.now()-lastAppInteraction<5*60*1000)api("/api/activity/ping",{method:"POST",body:"{}"}).catch(()=>{});},5*60*1000);

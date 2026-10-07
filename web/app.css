@@ -760,6 +760,15 @@ html.desktop .kanban.drag-scroll * {
   .row .btn { min-width: 140px; flex: 0 1 auto; }
   .dock-btn { font-size: 11px; }
 }
+.rate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rate-item {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 @media (min-width: 900px) {
   .shell { max-width: 840px; }
 }

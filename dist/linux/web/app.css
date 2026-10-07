@@ -686,6 +686,26 @@ html.desktop .kanban.drag-scroll * {
 }
 .msg-card p { white-space: pre-wrap; }
 
+.request-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.request-filters .btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+}
+.request-filter-count { opacity: .75; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .request-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
 .archive-modal {
   width: min(760px, calc(100% - 24px));
   max-height: calc(var(--app-h, 100dvh) - 32px);
@@ -739,6 +759,15 @@ html.desktop .kanban.drag-scroll * {
   .hello h1, .page h2 { font-size: 32px; }
   .row .btn { min-width: 140px; flex: 0 1 auto; }
   .dock-btn { font-size: 11px; }
+}
+.rate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rate-item {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 @media (min-width: 900px) {
   .shell { max-width: 840px; }

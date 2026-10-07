@@ -6,6 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=/root/miniapp
+EnvironmentFile=/root/miniapp/.env
 ExecStart=/root/miniapp/miniapp
 Restart=always
 RestartSec=5

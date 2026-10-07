@@ -154,6 +154,15 @@ func (s *Store) UpdateManagedChat(id int64, name string, chatID int64) (ManagedC
 			if s.DocsChatID == old {
 				s.DocsChatID = chatID
 			}
+			if s.Settings.ApprovalChatID == old {
+				s.Settings.ApprovalChatID = chatID
+			}
+			if s.Settings.PaymentChatID == old {
+				s.Settings.PaymentChatID = chatID
+			}
+			if s.Settings.SaldoChatID == old {
+				s.Settings.SaldoChatID = chatID
+			}
 			for j := range s.Appeals {
 				if s.Appeals[j].ChatID == old {
 					s.Appeals[j].ChatID = chatID
@@ -187,6 +196,15 @@ func (s *Store) DeleteManagedChat(id int64) error {
 		}
 		if s.DocsChatID == gone.ChatID {
 			s.DocsChatID = 0
+		}
+		if s.Settings.ApprovalChatID == gone.ChatID {
+			s.Settings.ApprovalChatID = 0
+		}
+		if s.Settings.PaymentChatID == gone.ChatID {
+			s.Settings.PaymentChatID = 0
+		}
+		if s.Settings.SaldoChatID == gone.ChatID {
+			s.Settings.SaldoChatID = 0
 		}
 	}
 	return s.saveLocked()

@@ -20,22 +20,23 @@ const (
 )
 
 type VaultFile struct {
-	RequestID    int64     `json:"request_id,omitempty"`
-	RequestUID   string    `json:"request_uid,omitempty"`
-	RequestTitle string    `json:"request_title,omitempty"`
-	ID           int64     `json:"id"`
-	UID          string    `json:"uid"`
-	Scope        string    `json:"scope"`
-	OwnerID      int64     `json:"owner_id,omitempty"`
-	Folder       string    `json:"folder"`
-	Name         string    `json:"name"`
-	Mime         string    `json:"mime,omitempty"`
-	Size         int64     `json:"size,omitempty"`
-	Rel          string    `json:"rel,omitempty"`
-	CreatedBy    int64     `json:"created_by"`
-	CreatedName  string    `json:"created_name"`
-	CreatedAt    time.Time `json:"created_at"`
-	Mine         bool      `json:"mine,omitempty"`
+	SystemArchive bool      `json:"system_archive,omitempty"`
+	RequestID     int64     `json:"request_id,omitempty"`
+	RequestUID    string    `json:"request_uid,omitempty"`
+	RequestTitle  string    `json:"request_title,omitempty"`
+	ID            int64     `json:"id"`
+	UID           string    `json:"uid"`
+	Scope         string    `json:"scope"`
+	OwnerID       int64     `json:"owner_id,omitempty"`
+	Folder        string    `json:"folder"`
+	Name          string    `json:"name"`
+	Mime          string    `json:"mime,omitempty"`
+	Size          int64     `json:"size,omitempty"`
+	Rel           string    `json:"rel,omitempty"`
+	CreatedBy     int64     `json:"created_by"`
+	CreatedName   string    `json:"created_name"`
+	CreatedAt     time.Time `json:"created_at"`
+	Mine          bool      `json:"mine,omitempty"`
 }
 
 // CompanyVaultTab — доп. вкладка внутри внутреннего или внешнего контура компании.
@@ -171,6 +172,7 @@ func (s *Store) DeleteCompany(id int64) error {
 	}
 	kept := []VaultFile{}
 	for _, f := range s.VaultFiles {
+
 		if f.Scope == VaultCompany && f.OwnerID == id {
 			if f.Rel != "" {
 				_ = os.Remove(filepath.Join(s.FilesDir(), f.Rel))
@@ -199,6 +201,12 @@ func (s *Store) VaultFilesCopy(scope string, ownerID int64, folder string, viewe
 	folder = normVaultFolder(scope, folder)
 	out := []VaultFile{}
 	for _, f := range s.VaultFiles {
+		if f.SystemArchive {
+			u, _ := s.userLocked(viewer)
+			if u.Role != RoleAdmin && u.Role != RoleOwner {
+				continue
+			}
+		}
 		if f.Scope != scope {
 			continue
 		}

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"tg-bot-orh3/MINI_APP/internal/appdb"
@@ -23,15 +24,17 @@ import (
 )
 
 type API struct {
-	db        *appdb.Store
-	bot       *Bot
-	webDir    string
-	holidays  *holidays.Service
-	pf        *sources.ProfinanceClient
-	cbr       *sources.CBRClient
-	xe        *sources.XEClient
-	investing *sources.InvestingClient
-	rapira    *sources.RapiraClient
+	deliveryMu sync.Mutex
+	sender     TelegramSender
+	db         *appdb.Store
+	bot        *Bot
+	webDir     string
+	holidays   *holidays.Service
+	pf         *sources.ProfinanceClient
+	cbr        *sources.CBRClient
+	xe         *sources.XEClient
+	investing  *sources.InvestingClient
+	rapira     *sources.RapiraClient
 }
 
 func NewAPI(db *appdb.Store, bot *Bot, webDir string) *API {
@@ -46,8 +49,13 @@ func NewAPI(db *appdb.Store, bot *Bot, webDir string) *API {
 	} else {
 		log.Printf("miniapp holidays: %v", err)
 	}
+	var sender TelegramSender
+	if bot != nil {
+		sender = bot
+	}
 	return &API{
-		db: db, bot: bot, webDir: webDir, holidays: hs,
+		sender: sender,
+		db:     db, bot: bot, webDir: webDir, holidays: hs,
 		pf:        sources.NewProfinance(httpClient),
 		cbr:       sources.NewCBR(httpClient),
 		xe:        sources.NewXE(httpClient),
@@ -58,6 +66,13 @@ func NewAPI(db *appdb.Store, bot *Bot, webDir string) *API {
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/api/app-settings", a.withUser(a.appSettings))
+	mux.HandleFunc("/api/meetings", a.withUser(a.meetings))
+	mux.HandleFunc("/api/agents", a.withUser(a.agents))
+	mux.HandleFunc("/api/activity/ping", a.withUser(a.activityPing))
+	mux.HandleFunc("/api/analytics", a.withUser(a.analytics))
+	mux.HandleFunc("/api/archive-settings", a.withUser(a.archiveSettings))
+	mux.HandleFunc("/api/archive-now", a.withUser(a.archiveNow))
 	mux.HandleFunc("/api/home", a.withUser(a.home))
 	mux.HandleFunc("/api/me", a.withUser(a.me))
 	mux.HandleFunc("/api/summary", a.withUser(a.summary))
@@ -67,6 +82,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("/api/approvals", a.withUser(a.approvals))
 	mux.HandleFunc("/api/saldo", a.withUser(a.saldo))
 	mux.HandleFunc("/api/rates", a.withUser(a.getRates))
+	mux.HandleFunc("/api/rates/options", a.withUser(a.rateOptions))
+	mux.HandleFunc("/api/rates/config", a.withUser(a.rateConfig))
 	mux.HandleFunc("/api/holidays", a.withUser(a.getHolidays))
 	mux.HandleFunc("/api/balance", a.withUser(a.balance))
 	mux.HandleFunc("/api/compliance", a.withUser(a.compliance))
@@ -199,6 +216,12 @@ func (a *API) withUser(fn func(http.ResponseWriter, *http.Request, session)) htt
 		}
 		if s.Name == "" {
 			s.Name = rec.Name
+		}
+		if !a.guardRequestMutation(w, r, s) {
+			return
+		}
+		if r.MultipartForm != nil {
+			defer r.MultipartForm.RemoveAll()
 		}
 		fn(w, r.WithContext(context.WithValue(r.Context(), userKey, s)), s)
 	}
@@ -406,6 +429,10 @@ func (a *API) directory(w http.ResponseWriter, r *http.Request, s session) {
 			http.Error(w, "json", http.StatusBadRequest)
 			return
 		}
+		if in.CommissionEnabled != nil && !s.Admin && !s.Owner {
+			http.Error(w, "комиссию клиента меняет администратор", 403)
+			return
+		}
 		if in.Kind == "" {
 			in.Kind = kind
 		}
@@ -453,8 +480,10 @@ func (a *API) directory(w http.ResponseWriter, r *http.Request, s session) {
 
 // Kept as a tombstone for old cached clients. Existing document copies remain readable.
 func (a *API) archiveRequest(w http.ResponseWriter, r *http.Request, s session) {
- if !s.requireSection(w, appdb.SecRequests) || !s.requireSection(w, appdb.SecDocuments) { return }
- http.Error(w, "Сохранение заявок в документы отключено", http.StatusGone)
+	if !s.requireSection(w, appdb.SecRequests) || !s.requireSection(w, appdb.SecDocuments) {
+		return
+	}
+	http.Error(w, "Сохранение заявок в документы отключено", http.StatusGone)
 }
 
 func (a *API) requests(w http.ResponseWriter, r *http.Request, s session) {
@@ -472,31 +501,99 @@ func (a *API) requests(w http.ResponseWriter, r *http.Request, s session) {
 			for i := range b.Files {
 				b.Files[i].Mine = b.Files[i].CreatedBy != 0 && b.Files[i].CreatedBy == s.ID
 			}
+			b.RequestPermission, _ = a.db.RequestPermissions(id, s.ID, s.Admin || s.Owner)
+			if !b.CanView {
+				http.Error(w, "заявка не найдена", http.StatusNotFound)
+				return
+			}
 			writeJSON(w, b)
 			return
 		}
-		writeJSON(w, a.db.RequestViews())
+		views := a.db.RequestViews()
+		out := make([]appdb.RequestView, 0, len(views))
+		scope := r.URL.Query().Get("scope")
+		if scope == "" {
+			scope = "mine"
+		}
+		if scope != "mine" && scope != "all" {
+			http.Error(w, "неверный scope", 400)
+			return
+		}
+		for _, v := range views {
+			v.RequestPermission, _ = a.db.RequestPermissions(v.ID, s.ID, s.Admin || s.Owner)
+			if !v.CanView || (scope == "mine" && !v.IsMine) {
+				continue
+			}
+			out = append(out, v)
+		}
+		writeJSON(w, out)
 	case http.MethodPost:
 		var in struct {
-			Title          string `json:"title"`
-			UID            string `json:"uid"`
-			Status         string `json:"status"`
-			ID             int64  `json:"id"`
-			TableRef       string `json:"table_ref"`
-			Notes          string `json:"notes"`
-			ManagerID      int64  `json:"manager_id"`
-			ClientID       int64  `json:"client_id"`
-			CounterpartyID int64  `json:"counterparty_id"`
+			Title          string                 `json:"title"`
+			Action         string                 `json:"action"`
+			AgentID        int64                  `json:"agent_id"`
+			Economics      appdb.RequestEconomics `json:"economics"`
+			Comment        string                 `json:"comment"`
+			CloseReason    string                 `json:"close_reason"`
+			UID            string                 `json:"uid"`
+			Status         string                 `json:"status"`
+			ID             int64                  `json:"id"`
+			TableRef       string                 `json:"table_ref"`
+			Notes          string                 `json:"notes"`
+			ManagerID      int64                  `json:"manager_id"`
+			ClientID       int64                  `json:"client_id"`
+			CounterpartyID int64                  `json:"counterparty_id"`
 		}
 		if err := readJSON(r, &in); err != nil {
 			http.Error(w, "json", http.StatusBadRequest)
 			return
 		}
+		if in.Action == "edit_comment" {
+			rec, err := a.db.EditRequestComment(in.ID, in.Comment, s.ID, s.Admin || s.Owner)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			writeJSON(w, rec)
+			return
+		}
+		if in.Action == "economics" {
+			rec, err := a.db.SaveRequestEconomics(in.ID, in.AgentID, s.ID, in.Economics, s.Admin || s.Owner)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			writeJSON(w, rec)
+			return
+		}
+		if in.Action == "skip_stage" {
+			if !s.Admin && !s.Owner {
+				http.Error(w, "только администратор", 403)
+				return
+			}
+			rec, err := a.db.SkipRequestStage(in.ID, s.ID, in.CloseReason, true)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			writeJSON(w, rec)
+			return
+		}
+		if in.Action == "reopen" {
+			in.Status = "reopen"
+		}
 		if in.ID != 0 && in.Status != "" {
-			rec, err := a.db.SetRequestStatus(in.ID, in.Status, in.TableRef, in.Notes, s.ID)
+			rec, err := a.db.UpdateRequestState(in.ID, in.Status, in.CloseReason, s.ID, s.Admin || s.Owner)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
+			}
+			if rec.Status == "success_closed" {
+				for _, p := range a.db.PaymentsViews(true, s.ID) {
+					if p.RequestID == rec.ID && p.Kind == "client_commission" {
+						_ = a.deliver("payment", p.ID)
+					}
+				}
 			}
 			a.notifyUsers(appdb.SecRequests, appdb.NtfRequests, s.ID, requestNotifyHTML("Заявка", rec.UID, rec.Title, rec.Status))
 			writeJSON(w, rec)
@@ -541,6 +638,7 @@ func (a *API) approvals(w http.ResponseWriter, r *http.Request, s session) {
 		writeJSON(w, a.db.ApprovalsFor(s.ID))
 	case http.MethodPost:
 		var in struct {
+			Action     string `json:"action"`
 			ID         int64  `json:"id"`
 			Preview    string `json:"preview"`
 			RequestUID string `json:"request_uid"`
@@ -549,6 +647,19 @@ func (a *API) approvals(w http.ResponseWriter, r *http.Request, s session) {
 		}
 		if err := readJSON(r, &in); err != nil {
 			http.Error(w, "json", http.StatusBadRequest)
+			return
+		}
+		if in.Action == "retry_delivery" {
+			if !s.Admin && !s.Owner {
+				http.Error(w, "только администратор", 403)
+				return
+			}
+			if err := a.deliver("approval", in.ID); err != nil {
+				http.Error(w, err.Error(), 502)
+				return
+			}
+			d, _ := a.db.DeliveryRecord("approval", in.ID)
+			writeJSON(w, d)
 			return
 		}
 		if in.ID != 0 && in.Status != "" {
@@ -583,6 +694,17 @@ func (a *API) approvals(w http.ResponseWriter, r *http.Request, s session) {
 		}
 		if strings.TrimSpace(in.Preview) == "" && in.RequestID == 0 {
 			http.Error(w, "preview", http.StatusBadRequest)
+			return
+		}
+		if in.RequestID != 0 {
+			rec, err := a.db.CreateRequestApproval(in.RequestID, s.ID, s.Name, s.Admin || s.Owner)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			_ = a.deliver("approval", rec.ID)
+			rec.Delivery, _ = a.db.DeliveryRecord("approval", rec.ID)
+			writeJSON(w, rec)
 			return
 		}
 		writeJSON(w, a.db.AddApproval(in.Preview, s.Name, s.ID, in.RequestUID, in.RequestID))
@@ -621,6 +743,7 @@ func (a *API) saldo(w http.ResponseWriter, r *http.Request, s session) {
 			"currencies":     curs,
 			"ops":            a.db.SaldoCopy(),
 			"totals":         a.db.SaldoTotals(),
+			"balances":       a.db.SaldoBalancesCopy(),
 			"report_lines":   a.db.SaldoReportLines(),
 			"lots":           a.db.OpenLotsByManager(s.ID),
 			"report":         a.db.SaldoReport(),
@@ -645,15 +768,41 @@ func (a *API) saldo(w http.ResponseWriter, r *http.Request, s session) {
 			http.Error(w, "json", http.StatusBadRequest)
 			return
 		}
-		if in.SendFiles {
-			txt, bal, ops := a.db.SaldoFiles()
-			_ = a.bot.Notify(s.ID, "Файлы сальдо отправлены вам в эту личку.")
-			if err := a.bot.SendBytes(s.ID, "saldo_table.txt", []byte(txt), "saldo_table.txt"); err != nil {
-				http.Error(w, "напишите боту /start в личке, потом повторите: "+err.Error(), http.StatusBadRequest)
+		if in.Action == "rebuild_balances" {
+			if !s.Admin && !s.Owner {
+				http.Error(w, "только администратор", 403)
 				return
 			}
-			_ = a.bot.SendBytes(s.ID, "saldo_balances.csv", []byte(bal), "")
-			_ = a.bot.SendBytes(s.ID, "saldo_operations.csv", []byte(ops), "")
+			if err := a.db.RebuildSaldoBalances(s.ID); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			writeJSON(w, map[string]bool{"ok": true})
+			return
+		}
+		if in.SendFiles {
+			txt, bal, ops := a.db.SaldoFiles()
+			chatID := a.db.AppSettings().SaldoChatID
+			if chatID == 0 {
+				http.Error(w, "настройте чат сальдо", http.StatusBadRequest)
+				return
+			}
+			if a.sender == nil {
+				http.Error(w, "бот недоступен", http.StatusBadGateway)
+				return
+			}
+			if _, err := a.sender.SendBytesToGroup(chatID, "saldo_table.txt", []byte(txt), "Сальдо"); err != nil {
+				http.Error(w, "не удалось отправить в чат сальдо", http.StatusBadGateway)
+				return
+			}
+			if _, err := a.sender.SendBytesToGroup(chatID, "saldo_balances.csv", []byte(bal), "Текущие остатки"); err != nil {
+				http.Error(w, "не удалось отправить остатки в чат сальдо", http.StatusBadGateway)
+				return
+			}
+			if _, err := a.sender.SendBytesToGroup(chatID, "saldo_operations.csv", []byte(ops), "Журнал операций"); err != nil {
+				http.Error(w, "не удалось отправить журнал в чат сальдо", http.StatusBadGateway)
+				return
+			}
 			writeJSON(w, map[string]any{"ok": true, "sent": true})
 			return
 		}
@@ -726,7 +875,10 @@ func (a *API) getRates(w http.ResponseWriter, r *http.Request, s session) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
-	writeJSON(w, ratesJSON(a.fetchRates(ctx)))
+	snap := a.fetchRates(ctx)
+	out := ratesJSON(snap)
+	out["custom_slots"] = customRates(snap, a.db.AppSettings().CustomRateSlots)
+	writeJSON(w, out)
 }
 
 func ratesJSON(s rates.Snapshot) map[string]any {
@@ -1107,6 +1259,7 @@ func (a *API) payments(w http.ResponseWriter, r *http.Request, s session) {
 		writeJSON(w, a.db.PaymentsViews(s.canPayments(), s.ID))
 	case http.MethodPost:
 		var in struct {
+			Action    string `json:"action"`
 			ID        int64  `json:"id"`
 			RequestID int64  `json:"request_id"`
 			Text      string `json:"text"`
@@ -1114,6 +1267,19 @@ func (a *API) payments(w http.ResponseWriter, r *http.Request, s session) {
 		}
 		if err := readJSON(r, &in); err != nil {
 			http.Error(w, "json", http.StatusBadRequest)
+			return
+		}
+		if in.Action == "retry_delivery" {
+			if !s.Admin && !s.Owner {
+				http.Error(w, "только администратор", 403)
+				return
+			}
+			if err := a.deliver("payment", in.ID); err != nil {
+				http.Error(w, err.Error(), 502)
+				return
+			}
+			d, _ := a.db.DeliveryRecord("payment", in.ID)
+			writeJSON(w, d)
 			return
 		}
 		if in.ID != 0 && in.Status == "sent" {
@@ -1152,11 +1318,17 @@ func (a *API) payments(w http.ResponseWriter, r *http.Request, s session) {
 		if !s.requireSection(w, appdb.SecRequests) {
 			return
 		}
+		if a.db.AppSettings().PaymentChatID == 0 {
+			http.Error(w, "настройте чат оплаты", 400)
+			return
+		}
 		rec, err := a.db.AddPayment(in.RequestID, in.Text, s.Name, s.ID)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		_ = a.deliver("payment", rec.ID)
+		rec.Delivery, _ = a.db.DeliveryRecord("payment", rec.ID)
 		a.notifyPayments(s.ID, "Новая оплата в отправку\n\n<b>"+tgEsc(rec.RequestTitle)+"</b>\n"+tgEsc(rec.Context)+"\n\nЧто отправить:\n"+tgEsc(rec.Text)+"\n\nMini App → Отправка")
 		writeJSON(w, rec)
 	default:
@@ -1717,6 +1889,10 @@ func (a *API) notifyPayments(except int64, html string) {
 }
 
 func (a *API) documents(w http.ResponseWriter, r *http.Request, s session) {
+	if id, _ := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64); id != 0 && !s.Admin && !s.Owner && a.db.IsSystemArchive(id) {
+		http.Error(w, "только администратор", 403)
+		return
+	}
 	if !s.requireSection(w, appdb.SecDocuments) {
 		return
 	}

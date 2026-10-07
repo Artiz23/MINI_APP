@@ -32,14 +32,15 @@ type Manager struct {
 }
 
 type Client struct {
-	ID          int64     `json:"id"`
-	UID         string    `json:"uid"`
-	Name        string    `json:"name"`
-	WorkID      string    `json:"work_id,omitempty"`
-	EmployeeIDs []int64   `json:"employee_ids,omitempty"`
-	CreatedBy   int64     `json:"created_by,omitempty"`
-	CreatedName string    `json:"created_name,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	CommissionEnabled bool      `json:"commission_enabled"`
+	ID                int64     `json:"id"`
+	UID               string    `json:"uid"`
+	Name              string    `json:"name"`
+	WorkID            string    `json:"work_id,omitempty"`
+	EmployeeIDs       []int64   `json:"employee_ids,omitempty"`
+	CreatedBy         int64     `json:"created_by,omitempty"`
+	CreatedName       string    `json:"created_name,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
 }
 
 type Counterparty struct {
@@ -53,6 +54,7 @@ type Counterparty struct {
 }
 
 type RequestView struct {
+	RequestPermission
 	DocumentID    int64  `json:"document_id,omitempty"`
 	DocumentBy    int64  `json:"document_by,omitempty"`
 	DocumentPlace string `json:"document_place,omitempty"`
@@ -70,27 +72,28 @@ type RequestView struct {
 }
 
 type CatalogIn struct {
-	Kind             string  `json:"kind"`
-	ID               int64   `json:"id,omitempty"`
-	Name             string  `json:"name"`
-	Title            string  `json:"title,omitempty"`
-	TelegramID       int64   `json:"telegram_id,omitempty"`
-	Abbrev           string  `json:"abbrev,omitempty"`
-	WorkID           string  `json:"work_id,omitempty"`
-	Number           string  `json:"number,omitempty"`
-	LinkManagerID    int64   `json:"link_manager_id,omitempty"`
-	UnlinkManagerID  int64   `json:"unlink_manager_id,omitempty"`
-	LinkClientID     int64   `json:"link_client_id,omitempty"`
-	UnlinkClientID   int64   `json:"unlink_client_id,omitempty"`
-	LinkEmployeeID   int64   `json:"link_employee_id,omitempty"`
-	UnlinkEmployeeID int64   `json:"unlink_employee_id,omitempty"`
-	LinkPositionID   int64   `json:"link_position_id,omitempty"`
-	UnlinkPositionID int64   `json:"unlink_position_id,omitempty"`
-	PositionIDs      []int64 `json:"position_ids,omitempty"`
-	Access           Access  `json:"access,omitempty"`
-	RevokeAccess     bool    `json:"revoke_access,omitempty"`
-	CreatedBy        int64   `json:"-"`
-	CreatedName      string  `json:"-"`
+	CommissionEnabled *bool   `json:"commission_enabled,omitempty"`
+	Kind              string  `json:"kind"`
+	ID                int64   `json:"id,omitempty"`
+	Name              string  `json:"name"`
+	Title             string  `json:"title,omitempty"`
+	TelegramID        int64   `json:"telegram_id,omitempty"`
+	Abbrev            string  `json:"abbrev,omitempty"`
+	WorkID            string  `json:"work_id,omitempty"`
+	Number            string  `json:"number,omitempty"`
+	LinkManagerID     int64   `json:"link_manager_id,omitempty"`
+	UnlinkManagerID   int64   `json:"unlink_manager_id,omitempty"`
+	LinkClientID      int64   `json:"link_client_id,omitempty"`
+	UnlinkClientID    int64   `json:"unlink_client_id,omitempty"`
+	LinkEmployeeID    int64   `json:"link_employee_id,omitempty"`
+	UnlinkEmployeeID  int64   `json:"unlink_employee_id,omitempty"`
+	LinkPositionID    int64   `json:"link_position_id,omitempty"`
+	UnlinkPositionID  int64   `json:"unlink_position_id,omitempty"`
+	PositionIDs       []int64 `json:"position_ids,omitempty"`
+	Access            Access  `json:"access,omitempty"`
+	RevokeAccess      bool    `json:"revoke_access,omitempty"`
+	CreatedBy         int64   `json:"-"`
+	CreatedName       string  `json:"-"`
 }
 
 func (s *Store) migrateCatalogLocked() bool {
@@ -358,6 +361,10 @@ func (s *Store) CatalogAdd(in CatalogIn) (any, error) {
 		id := s.nextLocked()
 		c := Client{ID: id, UID: uid("cl", id), Name: name, WorkID: strings.TrimSpace(in.WorkID), CreatedBy: in.CreatedBy, CreatedName: strings.TrimSpace(in.CreatedName), CreatedAt: now}
 		s.Clients = append(s.Clients, c)
+		if in.CommissionEnabled != nil {
+			s.Clients[len(s.Clients)-1].CommissionEnabled = *in.CommissionEnabled
+			c.CommissionEnabled = *in.CommissionEnabled
+		}
 		_ = s.saveLocked()
 		return c, nil
 	case "positions":
@@ -665,6 +672,9 @@ func (s *Store) catalogUpdateLocked(in CatalogIn) (any, error) {
 			if s.Clients[i].ID != in.ID {
 				continue
 			}
+			oldClient := s.Clients[i]
+			oldID := s.NextID
+			oldAudit := len(s.AuditEvents)
 			if name := strings.TrimSpace(in.Name); name != "" {
 				name, err := s.uniqueKindNameLocked("clients", name, in.ID)
 				if err != nil {
@@ -675,7 +685,16 @@ func (s *Store) catalogUpdateLocked(in CatalogIn) (any, error) {
 			if strings.TrimSpace(in.WorkID) != "" {
 				s.Clients[i].WorkID = strings.TrimSpace(in.WorkID)
 			}
-			_ = s.saveLocked()
+			if in.CommissionEnabled != nil && s.Clients[i].CommissionEnabled != *in.CommissionEnabled {
+				s.Clients[i].CommissionEnabled = *in.CommissionEnabled
+				s.AuditEvents = append(s.AuditEvents, AuditEvent{ID: s.nextLocked(), ActorID: in.CreatedBy, EntityType: "client", EntityID: in.ID, Action: "commission", Before: fmt.Sprint(oldClient.CommissionEnabled), After: fmt.Sprint(*in.CommissionEnabled), At: time.Now()})
+			}
+			if err := s.saveLocked(); err != nil {
+				s.Clients[i] = oldClient
+				s.NextID = oldID
+				s.AuditEvents = s.AuditEvents[:oldAudit]
+				return nil, err
+			}
 			s.Clients[i].EmployeeIDs = s.employeesOfClientLocked(in.ID)
 			return s.Clients[i], nil
 		}
@@ -767,6 +786,14 @@ func (s *Store) CatalogDelete(kind string, id, by int64, admin bool) error {
 		return fmt.Errorf("нужен id")
 	}
 	kind = strings.TrimSpace(kind)
+	if kind == "counterparties" {
+		c, _ := s.counterpartyLocked(id)
+		for _, op := range s.SaldoOps {
+			if op.CounterpartyID == id || (op.CounterpartyID == 0 && strings.EqualFold(op.CP, c.Name)) {
+				return fmt.Errorf("у контрагента есть финансовая история; удаление запрещено")
+			}
+		}
+	}
 	if kind == "managers" || kind == "clients" || kind == "counterparties" {
 		owner, ok := s.catalogOwnerLocked(kind, id)
 		if !ok {

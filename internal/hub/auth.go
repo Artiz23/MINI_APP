@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"tg-bot-orh3/MINI_APP/internal/secrets"
 )
@@ -55,6 +56,14 @@ func checkInitData(initData, token string) (tgUser, error) {
 	}
 	if u.ID == 0 {
 		return u, fmt.Errorf("пустой user id")
+	}
+	authUnix, err := strconv.ParseInt(vals.Get("auth_date"), 10, 64)
+	if err != nil || authUnix <= 0 {
+		return u, fmt.Errorf("нет корректного auth_date")
+	}
+	age := time.Since(time.Unix(authUnix, 0))
+	if age < -5*time.Minute || age > 24*time.Hour {
+		return u, fmt.Errorf("initData устарели")
 	}
 	return u, nil
 }

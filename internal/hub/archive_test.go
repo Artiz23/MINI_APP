@@ -31,7 +31,9 @@ func TestArchiveAPIFlowAndPermissions(t *testing.T) {
 		t.Fatalf("retired archive endpoint accepted a write: %d %s", w.Code, w.Body.String())
 	}
 	// A copy saved before the feature was retired is still readable and deletable.
-	if err := db.ArchiveRequest(1, appdb.VaultMisc, 0, appdb.VaultOther, user.ID, user.Name); err != nil { t.Fatal(err) }
+	if err := db.ArchiveRequest(1, appdb.VaultMisc, 0, appdb.VaultOther, user.ID, user.Name); err != nil {
+		t.Fatal(err)
+	}
 	f := db.VaultFiles[0]
 	query := "/api/documents?id=" + strconv.FormatInt(f.ID, 10)
 	w = httptest.NewRecorder()

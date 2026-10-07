@@ -11,6 +11,9 @@ import (
 )
 
 type Payment struct {
+	Delivery
+	Kind           string    `json:"kind,omitempty"`
+	Auto           bool      `json:"auto,omitempty"`
 	ID             int64     `json:"id"`
 	UID            string    `json:"uid"`
 	RequestID      int64     `json:"request_id"`
@@ -215,8 +218,14 @@ func (s *Store) AddPayment(requestID int64, text, byName string, by int64) (Paym
 		CreatedBy: by, CreatedName: byName, CreatedAt: time.Now(),
 		EmployeeID: r.EmployeeID, ManagerID: r.ManagerID, ClientID: r.ClientID, CounterpartyID: r.CounterpartyID,
 	}
+	p.Kind = "regular"
+	p.Delivery = Delivery{ChatID: s.Settings.PaymentChatID, DeliveryStatus: "pending", DeliveryText: "ОПЛАТА\n" + s.requestContextLocked(r) + "\n" + text}
 	s.Payments = append(s.Payments, p)
-	_ = s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.Payments = s.Payments[:len(s.Payments)-1]
+		s.NextID = id
+		return PaymentView{}, err
+	}
 	return s.paymentViewLocked(p, r), nil
 }
 
@@ -227,12 +236,20 @@ func (s *Store) MarkPaymentSent(id, by int64, byName string) (PaymentView, error
 		if s.Payments[i].ID != id {
 			continue
 		}
+		old := s.Payments[i]
+		previousID := s.NextID
 		s.Payments[i].Status = "sent"
 		s.Payments[i].SentBy = by
 		s.Payments[i].SentName = byName
 		s.Payments[i].SentAt = time.Now()
 		r, _ := s.requestByIDLocked(s.Payments[i].RequestID)
-		_ = s.saveLocked()
+		s.AuditEvents = append(s.AuditEvents, AuditEvent{ID: s.nextLocked(), ActorID: by, EntityType: "payment", EntityID: id, Action: "sent", Before: old.Status, After: "sent", At: time.Now()})
+		if err := s.saveLocked(); err != nil {
+			s.Payments[i] = old
+			s.NextID = previousID
+			s.AuditEvents = s.AuditEvents[:len(s.AuditEvents)-1]
+			return PaymentView{}, err
+		}
 		return s.paymentViewLocked(s.Payments[i], r), nil
 	}
 	return PaymentView{}, fmt.Errorf("оплата не найдена")
@@ -272,6 +289,9 @@ func (s *Store) PendingPaymentsCount() int {
 func (s *Store) AddDealNote(requestID int64, kind, text, byName string, by int64) (DealFile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.actorCanEditRequestLocked(requestID, by) {
+		return DealFile{}, fmt.Errorf("нет права изменять заявку")
+	}
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return DealFile{}, fmt.Errorf("пустой текст")
@@ -295,6 +315,9 @@ func (s *Store) AddDealNote(requestID int64, kind, text, byName string, by int64
 func (s *Store) AddDealFile(requestID int64, name, mime string, data []byte, byName string, by int64, caption string) (DealFile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.actorCanEditRequestLocked(requestID, by) {
+		return DealFile{}, fmt.Errorf("нет права изменять заявку")
+	}
 	if _, ok := s.requestByIDLocked(requestID); !ok {
 		return DealFile{}, fmt.Errorf("заявка не найдена")
 	}
@@ -735,28 +758,29 @@ func (s *Store) ReturnPayment(id, by int64, _ bool) (PaymentView, error) {
 	return PaymentView{}, fmt.Errorf("оплата не найдена")
 }
 
-func (s *Store) DeleteDealFile(id, by int64, _ bool) error {
+func (s *Store) DeleteDealFile(id, by int64, admin bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	idx := -1
-	for i := range s.DealFiles {
-		if s.DealFiles[i].ID == id {
-			idx = i
-			break
+	for i, f := range s.DealFiles {
+		if f.ID != id {
+			continue
 		}
+		r, ok := s.requestByIDLocked(f.RequestID)
+		if !ok || !s.requestPermissionLocked(r, by, admin).CanEdit {
+			return fmt.Errorf("нет права изменять заявку")
+		}
+		old := s.DealFiles
+		s.DealFiles = append(append([]DealFile(nil), old[:i]...), old[i+1:]...)
+		if err := s.saveLocked(); err != nil {
+			s.DealFiles = old
+			return err
+		}
+		if f.Rel != "" {
+			_ = os.Remove(filepath.Join(s.FilesDir(), f.Rel))
+		}
+		return nil
 	}
-	if idx < 0 {
-		return fmt.Errorf("запись не найдена")
-	}
-	if s.DealFiles[idx].CreatedBy != by {
-		return fmt.Errorf("удалить может только тот, кто добавил")
-	}
-	rel := s.DealFiles[idx].Rel
-	s.DealFiles = append(s.DealFiles[:idx], s.DealFiles[idx+1:]...)
-	if rel != "" {
-		_ = os.Remove(filepath.Join(s.FilesDir(), rel))
-	}
-	return s.saveLocked()
+	return fmt.Errorf("запись не найдена")
 }
 
 func (s *Store) CancelAppeal(id, by int64, _ bool) error {
@@ -794,6 +818,9 @@ func (w AttachWait) IsVault() bool {
 func (s *Store) SetAttachWait(userID, requestID int64, d time.Duration) (RequestView, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.actorCanEditRequestLocked(requestID, userID) {
+		return RequestView{}, fmt.Errorf("нет права изменять заявку")
+	}
 	r, ok := s.requestByIDLocked(requestID)
 	if !ok || r.Status == "deleted" {
 		return RequestView{}, fmt.Errorf("заявка не найдена")
@@ -1018,6 +1045,9 @@ func (s *Store) DeleteOwnOnRequest(requestID, userID int64) (int, error) {
 	}
 	kept := []DealFile{}
 	rels := []string{}
+	if !s.actorCanEditRequestLocked(requestID, userID) {
+		return 0, fmt.Errorf("нет права изменять заявку")
+	}
 	n := 0
 	idGone := map[int64]bool{}
 	for _, f := range s.DealFiles {

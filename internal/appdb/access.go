@@ -3,13 +3,15 @@ package appdb
 import "strings"
 
 const (
-	SecRequests   = "requests"
-	SecApprovals  = "approvals"
-	SecSaldo      = "saldo"
-	SecRates      = "rates"
-	SecHolidays   = "holidays"
-	SecBalance    = "balance"
-	SecCompliance = "compliance"
+	SecMeetings     = "meetings"
+	SecAnalytics    = "analytics"
+	SecRequests     = "requests"
+	SecApprovals    = "approvals"
+	SecSaldo        = "saldo"
+	SecRates        = "rates"
+	SecHolidays     = "holidays"
+	SecBalance      = "balance"
+	SecCompliance   = "compliance"
 	SecDirectory    = "directory"
 	SecPayments     = "payments"
 	SecTasks        = "tasks"
@@ -20,11 +22,13 @@ const (
 )
 
 var SectionKeys = []string{
+	SecMeetings, SecAnalytics,
 	SecRequests, SecApprovals, SecSaldo, SecRates, SecHolidays, SecBalance, SecCompliance, SecDirectory, SecPayments, SecTasks,
 	SecAppeals, SecAppealLawyer, SecAppealDocs, SecDocuments,
 }
 
 var PositionAccessKeys = []string{
+	SecMeetings, SecAnalytics,
 	SecTasks, SecRequests, SecSaldo, SecApprovals, SecPayments, SecDirectory, SecRates, SecHolidays, SecBalance, SecCompliance,
 	SecAppeals, SecAppealLawyer, SecAppealDocs, SecDocuments,
 }
@@ -42,6 +46,7 @@ func DefaultAccess() Access {
 		SecSaldo:     true,
 		SecDirectory: true,
 		SecTasks:     true,
+		SecMeetings:  true,
 	}
 }
 

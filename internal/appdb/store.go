@@ -4,6 +4,8 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
+	"log"
+	"math/big"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,24 +40,33 @@ type User struct {
 }
 
 type Request struct {
-	ID             int64     `json:"id"`
-	UID            string    `json:"uid"`
-	Title          string    `json:"title"`
-	Status         string    `json:"status"`
-	ThreadID       int64     `json:"thread_id,omitempty"`
-	ThreadLink     string    `json:"thread_link,omitempty"`
-	CreatedBy      int64     `json:"created_by"`
-	CreatedName    string    `json:"created_name"`
-	CreatedAt      time.Time `json:"created_at"`
-	TableRef       string    `json:"table_ref,omitempty"`
-	Notes          string    `json:"notes,omitempty"`
-	EmployeeID     int64     `json:"employee_id,omitempty"`
-	ManagerID      int64     `json:"manager_id,omitempty"`
-	ClientID       int64     `json:"client_id,omitempty"`
-	CounterpartyID int64     `json:"counterparty_id,omitempty"`
+	ClosedAt         time.Time        `json:"closed_at,omitempty"`
+	AgentID          int64            `json:"agent_id,omitempty"`
+	Economics        RequestEconomics `json:"economics"`
+	Comment          string           `json:"comment,omitempty"`
+	CommentUpdatedAt time.Time        `json:"comment_updated_at,omitempty"`
+	CommentUpdatedBy int64            `json:"comment_updated_by,omitempty"`
+	CloseReason      string           `json:"close_reason,omitempty"`
+	WorkflowStage    RequestStage     `json:"workflow_stage,omitempty"`
+	ID               int64            `json:"id"`
+	UID              string           `json:"uid"`
+	Title            string           `json:"title"`
+	Status           string           `json:"status"`
+	ThreadID         int64            `json:"thread_id,omitempty"`
+	ThreadLink       string           `json:"thread_link,omitempty"`
+	CreatedBy        int64            `json:"created_by"`
+	CreatedName      string           `json:"created_name"`
+	CreatedAt        time.Time        `json:"created_at"`
+	TableRef         string           `json:"table_ref,omitempty"`
+	Notes            string           `json:"notes,omitempty"`
+	EmployeeID       int64            `json:"employee_id,omitempty"`
+	ManagerID        int64            `json:"manager_id,omitempty"`
+	ClientID         int64            `json:"client_id,omitempty"`
+	CounterpartyID   int64            `json:"counterparty_id,omitempty"`
 }
 
 type Approval struct {
+	Delivery
 	ID          int64     `json:"id"`
 	UID         string    `json:"uid"`
 	RequestUID  string    `json:"request_uid,omitempty"`
@@ -170,39 +181,47 @@ type Dispute struct {
 }
 
 type Store struct {
-	mu   sync.Mutex
-	path string
+	mu                sync.Mutex
+	path              string
+	SchemaVersion     int             `json:"schema_version"`
+	MigrationWarnings []string        `json:"migration_warnings,omitempty"`
+	AuditEvents       []AuditEvent    `json:"audit_events,omitempty"`
+	Settings          MiniAppSettings `json:"settings"`
+	Agents            []Agent         `json:"agents,omitempty"`
+	ActivitySlices    []ActivitySlice `json:"activity_slices,omitempty"`
+	Meetings          []Meeting       `json:"meetings,omitempty"`
 
-	Users             []User           `json:"users"`
-	Requests          []Request        `json:"requests"`
-	Approvals         []Approval       `json:"approvals"`
-	SaldoOps          []SaldoOp        `json:"saldo_ops"`
-	Companies         []Company        `json:"companies"`
-	Accounts          []Account        `json:"accounts"`
-	Compliances       []Compliance     `json:"compliances"`
-	Disputes          []Dispute        `json:"disputes"`
-	Payments          []Payment        `json:"payments,omitempty"`
-	DealFiles         []DealFile       `json:"deal_files,omitempty"`
-	Appeals           []Appeal         `json:"appeals,omitempty"`
-	Tasks             []Task           `json:"tasks,omitempty"`
-	AttachWaits       []AttachWait     `json:"attach_waits,omitempty"`
-	Employees         []Employee       `json:"employees,omitempty"`
-	Managers          []Manager        `json:"managers,omitempty"`
-	Clients           []Client         `json:"clients,omitempty"`
-	Counterparties    []Counterparty   `json:"counterparties,omitempty"`
-	Positions         []Position       `json:"positions,omitempty"`
-	SaldoCPs          []string         `json:"saldo_cps,omitempty"`
-	SaldoCurrencies   []string         `json:"saldo_currencies,omitempty"`
-	NextID            int64            `json:"next_id"`
-	MorningOK         string           `json:"morning_ok,omitempty"`
-	EveningOK         string           `json:"evening_ok,omitempty"`
-	LastEveningDigest map[int64]string `json:"last_evening_digest,omitempty"`
-	LastHolidayDay    map[int64]string `json:"last_holiday_day,omitempty"`
-	LastSent          []SentBatch      `json:"last_sent,omitempty"`
-	LawyerChatID      int64            `json:"lawyer_chat_id,omitempty"`
-	DocsChatID        int64            `json:"docs_chat_id,omitempty"`
-	Chats             []ManagedChat    `json:"chats,omitempty"`
-	VaultFiles        []VaultFile      `json:"vault_files,omitempty"`
+	Users             []User            `json:"users"`
+	Requests          []Request         `json:"requests"`
+	Approvals         []Approval        `json:"approvals"`
+	SaldoOps          []SaldoOp         `json:"saldo_ops"`
+	SaldoBalances     []SaldoBalance    `json:"saldo_balances,omitempty"`
+	Companies         []Company         `json:"companies"`
+	Accounts          []Account         `json:"accounts"`
+	Compliances       []Compliance      `json:"compliances"`
+	Disputes          []Dispute         `json:"disputes"`
+	Payments          []Payment         `json:"payments,omitempty"`
+	DealFiles         []DealFile        `json:"deal_files,omitempty"`
+	Appeals           []Appeal          `json:"appeals,omitempty"`
+	Tasks             []Task            `json:"tasks,omitempty"`
+	AttachWaits       []AttachWait      `json:"attach_waits,omitempty"`
+	Employees         []Employee        `json:"employees,omitempty"`
+	Managers          []Manager         `json:"managers,omitempty"`
+	Clients           []Client          `json:"clients,omitempty"`
+	Counterparties    []Counterparty    `json:"counterparties,omitempty"`
+	Positions         []Position        `json:"positions,omitempty"`
+	SaldoCPs          []string          `json:"saldo_cps,omitempty"`
+	SaldoCurrencies   []string          `json:"saldo_currencies,omitempty"`
+	NextID            int64             `json:"next_id"`
+	MorningOK         string            `json:"morning_ok,omitempty"`
+	EveningOK         string            `json:"evening_ok,omitempty"`
+	LastEveningDigest map[int64]string  `json:"last_evening_digest,omitempty"`
+	LastHolidayDay    map[int64]string  `json:"last_holiday_day,omitempty"`
+	LastSent          []SentBatch       `json:"last_sent,omitempty"`
+	LawyerChatID      int64             `json:"lawyer_chat_id,omitempty"`
+	DocsChatID        int64             `json:"docs_chat_id,omitempty"`
+	Chats             []ManagedChat     `json:"chats,omitempty"`
+	VaultFiles        []VaultFile       `json:"vault_files,omitempty"`
 	VaultTabs         []CompanyVaultTab `json:"vault_tabs,omitempty"`
 }
 
@@ -211,6 +230,7 @@ func Load(path string) (*Store, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.SchemaVersion = CurrentSchemaVersion
 			s.seed()
 			return s, s.saveLocked()
 		}
@@ -220,10 +240,20 @@ func Load(path string) (*Store, error) {
 		return nil, err
 	}
 	s.path = path
+	if s.SchemaVersion > CurrentSchemaVersion {
+		return nil, fmt.Errorf("schema version %d is newer than supported %d", s.SchemaVersion, CurrentSchemaVersion)
+	}
+	migrated := s.SchemaVersion < CurrentSchemaVersion
+	if migrated {
+		if err := backupBeforeMigration(path, data); err != nil {
+			return nil, err
+		}
+		s.migrateSchemaLocked()
+	}
 	if s.NextID == 0 {
 		s.NextID = 1
 	}
-	changed := false
+	changed := migrated
 	if len(s.Companies) == 0 {
 		s.seedCompanies()
 		changed = true
@@ -261,6 +291,12 @@ func Load(path string) (*Store, error) {
 			s.Users[i].Access = NormalizeAccess(s.Users[i].Access)
 		}
 	}
+	if migrated {
+		s.SaldoBalances = s.rebuildBalancesLocked()
+	}
+	if !s.saldoReconcilesLocked() {
+		log.Printf("miniapp: saldo balances differ from journal; admin rebuild required")
+	}
 	if changed {
 		if err := s.saveLocked(); err != nil {
 			return s, err
@@ -296,16 +332,28 @@ func (s *Store) nextLocked() int64 {
 	return id
 }
 
-func (s *Store) saveLocked() error {
-	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil && !os.IsExist(err) {
-		_ = err
+func (s *Store) saveLocked() (err error) {
+	stages := make([]RequestStage, len(s.Requests))
+	for i, r := range s.Requests {
+		stages[i] = r.WorkflowStage
+	}
+	defer func() {
+		if err != nil {
+			for i, stage := range stages {
+				s.Requests[i].WorkflowStage = stage
+			}
+		}
+	}()
+	s.syncWorkflowLocked()
+	if err = os.MkdirAll(filepath.Dir(s.path), 0755); err != nil {
+		return err
 	}
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return err
 	}
 	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if err = os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
 	return os.Rename(tmp, s.path)
@@ -553,59 +601,33 @@ func (s *Store) AddRequest(title, name string, by int64, threadID int64, link st
 	}
 	id := s.nextLocked()
 	r := Request{
-		ID: id, UID: code, Title: title, Status: "open",
+		ID: id, UID: code, Title: title, Status: "open", WorkflowStage: StageApproval,
 		ThreadID: threadID, ThreadLink: link, CreatedBy: by, CreatedName: name, CreatedAt: now,
 		EmployeeID: emp.ID, ManagerID: managerID, ClientID: clientID, CounterpartyID: counterpartyID,
 	}
+	if title != code {
+		r.Comment = title
+	}
 	s.Requests = append(s.Requests, r)
-	_ = s.saveLocked()
+	if err := s.saveLocked(); err != nil {
+		s.Requests = s.Requests[:len(s.Requests)-1]
+		s.NextID = id
+		return RequestView{}, err
+	}
 	return s.viewRequestLocked(r), nil
 }
 
 func (s *Store) SetRequestStatus(id int64, status, tableRef, notes string, by int64) (Request, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.Requests {
-		if s.Requests[i].ID != id {
-			continue
-		}
-		if status == "open" || status == "deleted" {
-			if s.Requests[i].CreatedBy != by {
-				return Request{}, fmt.Errorf("вернуть или удалить заявку может только тот, кто её отправил")
-			}
-		}
-		s.Requests[i].Status = status
-		if tableRef != "" {
-			s.Requests[i].TableRef = tableRef
-		}
-		if notes != "" {
-			s.Requests[i].Notes = notes
-		}
-		_ = s.saveLocked()
-		return s.Requests[i], nil
-	}
-	return Request{}, fmt.Errorf("заявка не найдена")
+	return s.UpdateRequestState(id, status, notes, by, false)
 }
 
-func (s *Store) DeleteRequest(id, by int64, _ bool) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := range s.Requests {
-		if s.Requests[i].ID != id {
-			continue
-		}
-		if s.Requests[i].CreatedBy != by {
-			return fmt.Errorf("удалить заявку может только тот, кто её отправил")
-		}
-		s.Requests[i].Status = "deleted"
-		_ = s.saveLocked()
-		return nil
-	}
-	return fmt.Errorf("заявка не найдена")
+func (s *Store) DeleteRequest(id, by int64, admin bool) error {
+	_, err := s.UpdateRequestState(id, "deleted", "", by, admin)
+	return err
 }
 
 func (s *Store) canTouchRequestLocked(r Request, by int64, admin bool) bool {
-	return admin || r.CreatedBy == by
+	return s.requestPermissionLocked(r, by, admin).CanEdit
 }
 
 func (s *Store) RequestsCopy() []Request {
@@ -646,14 +668,24 @@ func (s *Store) AddApproval(preview, mgrName string, mgrID int64, reqUID string,
 func (s *Store) DecideApproval(id int64, status, by string) (Approval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := range s.Approvals {
-		if s.Approvals[i].ID == id {
-			s.Approvals[i].Status = status
-			s.Approvals[i].DecidedBy = by
-			s.Approvals[i].DecidedAt = time.Now()
-			_ = s.saveLocked()
-			return s.Approvals[i], nil
+	if status != "approved" && status != "rejected" {
+		return Approval{}, fmt.Errorf("неверное решение")
+	}
+	for i, old := range s.Approvals {
+		if old.ID != id {
+			continue
 		}
+		if old.Status != "pending" {
+			return Approval{}, fmt.Errorf("решение уже принято")
+		}
+		s.Approvals[i].Status = status
+		s.Approvals[i].DecidedBy = by
+		s.Approvals[i].DecidedAt = time.Now()
+		if err := s.saveLocked(); err != nil {
+			s.Approvals[i] = old
+			return Approval{}, err
+		}
+		return s.Approvals[i], nil
 	}
 	return Approval{}, fmt.Errorf("согласование не найдено")
 }
@@ -845,26 +877,18 @@ func (s *Store) DeleteSaldoCP(query string) (string, int, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	s.SaldoCPs = append(s.SaldoCPs[:idx], s.SaldoCPs[idx+1:]...)
-	cps := s.Counterparties[:0]
-	for _, c := range s.Counterparties {
-		if !strings.EqualFold(c.Name, name) {
-			cps = append(cps, c)
-		}
-	}
-	s.Counterparties = cps
-	ops := 0
-	kept := make([]SaldoOp, 0, len(s.SaldoOps))
 	for _, op := range s.SaldoOps {
-		if op.CP == name {
-			ops++
-			continue
+		if strings.EqualFold(op.CP, name) {
+			return "", 0, fmt.Errorf("у контрагента есть финансовая история; удаление запрещено")
 		}
-		kept = append(kept, op)
 	}
-	s.SaldoOps = kept
-	_ = s.saveLocked()
-	return name, ops, nil
+	old := append([]string(nil), s.SaldoCPs...)
+	s.SaldoCPs = append(s.SaldoCPs[:idx], s.SaldoCPs[idx+1:]...)
+	if err := s.saveLocked(); err != nil {
+		s.SaldoCPs = old
+		return "", 0, err
+	}
+	return name, 0, nil
 }
 
 func (s *Store) knownSaldoLocked(cp, kind, cur string) error {
@@ -956,9 +980,7 @@ func (s *Store) AddSaldo(cp, kind, cur, action, mgr string, amt float64, mgrID, 
 		RequestID: requestID, EmployeeID: empID, ClientID: req.ClientID,
 		CounterpartyID: counterpartyID, CatalogManagerID: req.ManagerID,
 	}
-	s.SaldoOps = append(s.SaldoOps, op)
-	_ = s.saveLocked()
-	return op, nil
+	return s.applySaldoDeltaLocked(op)
 }
 
 func (s *Store) requestLabelLocked(id int64) string {
@@ -992,16 +1014,22 @@ type SaldoLine struct {
 func (s *Store) SaldoReportLines() []SaldoLine {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	tot := map[string]float64{}
+	tot := map[string]*big.Rat{}
 	meta := map[string]SaldoLine{}
 	for _, op := range s.SaldoOps {
+		if cp, ok := s.counterpartyLocked(op.CounterpartyID); ok {
+			op.CP = cp.Name
+		}
 		req := s.requestLabelLocked(op.RequestID)
 		key := op.CP + "\x00" + req + "\x00" + op.Kind + "\x00" + op.Currency
-		if op.Action == "minus" {
-			tot[key] -= op.Amount
-		} else {
-			tot[key] += op.Amount
+		if tot[key] == nil {
+			tot[key] = new(big.Rat)
 		}
+		amount := decimalFloat(op.Amount)
+		if op.Action == "minus" {
+			amount.Neg(amount)
+		}
+		tot[key].Add(tot[key], amount)
 		meta[key] = SaldoLine{
 			CP: op.CP, Request: req, RequestID: op.RequestID,
 			Kind: KindLabel(op.Kind), KindKey: op.Kind, Currency: op.Currency,
@@ -1009,11 +1037,11 @@ func (s *Store) SaldoReportLines() []SaldoLine {
 	}
 	out := make([]SaldoLine, 0, len(tot))
 	for k, amt := range tot {
-		if amt == 0 {
+		if amt.Sign() == 0 {
 			continue
 		}
 		row := meta[k]
-		row.Amount = amt
+		row.Amount, _ = amt.Float64()
 		out = append(out, row)
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -1053,10 +1081,18 @@ func (s *Store) SaldoDetail(cp string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp = strings.TrimSpace(cp)
+	var counterpartyID int64
+	for _, c := range s.Counterparties {
+		if strings.EqualFold(c.Name, cp) {
+			counterpartyID = c.ID
+			cp = c.Name
+			break
+		}
+	}
 	tot := map[string]float64{}
 	var hist []SaldoOp
 	for _, op := range s.SaldoOps {
-		if op.CP != cp {
+		if counterpartyID != 0 && op.CounterpartyID != counterpartyID || counterpartyID == 0 && !strings.EqualFold(op.CP, cp) {
 			continue
 		}
 		hist = append(hist, op)
@@ -1100,6 +1136,7 @@ func (s *Store) SaldoDetail(cp string) string {
 }
 
 func (s *Store) SaldoFiles() (txt, balCSV, opCSV string) {
+	s = s.saldoSnapshot()
 	lines := s.SaldoReportLines()
 	ops := s.SaldoCopy()
 	var balRows [][]string
@@ -1169,9 +1206,10 @@ func (s *Store) CloseSaldoLot(opID, managerID int64, managerName string) (SaldoL
 		RequestID: src.RequestID, EmployeeID: src.EmployeeID, ClientID: src.ClientID,
 		CounterpartyID: src.CounterpartyID, CatalogManagerID: src.CatalogManagerID,
 	}
-	s.SaldoOps = append(s.SaldoOps, op)
+	if _, err := s.applySaldoDeltaLocked(op); err != nil {
+		return SaldoLot{}, err
+	}
 	lot.Remaining = 0
-	_ = s.saveLocked()
 	return lot, nil
 }
 
@@ -1349,6 +1387,11 @@ func (s *Store) SaldoCopy() []SaldoOp {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := append([]SaldoOp(nil), s.SaldoOps...)
+	for i := range out {
+		if c, ok := s.counterpartyLocked(out[i].CounterpartyID); ok {
+			out[i].CP = c.Name
+		}
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
 	return out
 }
@@ -1357,13 +1400,13 @@ func (s *Store) SaldoTotals() map[string]float64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	tot := map[string]float64{}
-	for _, op := range s.SaldoOps {
-		key := op.CP + "|" + op.Kind + "|" + op.Currency
-		if op.Action == "minus" {
-			tot[key] -= op.Amount
-		} else {
-			tot[key] += op.Amount
+	for _, v := range s.SaldoBalances {
+		name := v.CP
+		if c, ok := s.counterpartyLocked(v.CounterpartyID); ok {
+			name = c.Name
 		}
+		n, _ := strconv.ParseFloat(v.Amount, 64)
+		tot[name+"|"+v.Kind+"|"+v.Currency] += n
 	}
 	return tot
 }

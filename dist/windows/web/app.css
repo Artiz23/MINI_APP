@@ -686,6 +686,60 @@ html.desktop .kanban.drag-scroll * {
 }
 .msg-card p { white-space: pre-wrap; }
 
+.request-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.request-filters .btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+}
+.request-filter-count { opacity: .75; font-variant-numeric: tabular-nums; }
+@media (max-width: 600px) {
+  .request-filters { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+.archive-modal {
+  width: min(760px, calc(100% - 24px));
+  max-height: calc(var(--app-h, 100dvh) - 32px);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+.archive-modal::backdrop { background: rgba(15, 18, 24, .65); }
+.archive-modal > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+  position: sticky;
+  top: 0;
+  background: var(--sheet);
+  border-bottom: 1px solid var(--line);
+  z-index: 1;
+}
+.archive-modal > header h3 { margin: 0; overflow-wrap: anywhere; }
+.archive-body { padding: 16px; }
+.archive-body select { width: 100%; }
+.archive-body .btn:disabled { opacity: .5; cursor: wait; }
+.archive-report { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.archive-preview { margin-top: 16px; }
+.archive-preview img, .archive-preview video, .archive-preview audio { max-width: 100%; }
+.archive-preview iframe { width: 100%; height: 60vh; border: 0; }
+
 @media (max-width: 420px) {
   :root { --pad: 14px; }
   .hello h1 { font-size: 24px; }
@@ -705,6 +759,15 @@ html.desktop .kanban.drag-scroll * {
   .hello h1, .page h2 { font-size: 32px; }
   .row .btn { min-width: 140px; flex: 0 1 auto; }
   .dock-btn { font-size: 11px; }
+}
+.rate-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rate-item {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 @media (min-width: 900px) {
   .shell { max-width: 840px; }

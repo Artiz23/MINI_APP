@@ -28,7 +28,7 @@ func defaultPositions() []struct {
 		{"Операционист", Access{
 			SecTasks: true, SecRequests: true, SecSaldo: true, SecApprovals: true, SecPayments: true,
 			SecDirectory: true, SecRates: true, SecHolidays: true, SecBalance: true, SecCompliance: true,
-			SecAppeals: true, SecDocuments: true,
+			SecAppeals: true, SecDocuments: true, SecMeetings: true,
 		}},
 		{"Документалист", Access{
 			SecTasks: true, SecDirectory: true, SecRates: true, SecHolidays: true, SecBalance: true, SecCompliance: true,
@@ -70,6 +70,10 @@ func (s *Store) grantDocumentsAccessLocked() bool {
 		}
 		if !s.Positions[i].Access[SecDocuments] {
 			s.Positions[i].Access[SecDocuments] = true
+			changed = true
+		}
+		if n == "операционист" && !s.Positions[i].Access[SecMeetings] {
+			s.Positions[i].Access[SecMeetings] = true
 			changed = true
 		}
 	}

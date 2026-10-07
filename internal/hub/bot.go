@@ -921,6 +921,53 @@ func (b *Bot) handleCallback(q *tgbotapi.CallbackQuery) {
 			log.Printf("callback ack: %v", err)
 		}
 	}
+	if strings.HasPrefix(data, "apr:") {
+		parts := strings.Split(data, ":")
+		if len(parts) != 3 {
+			ack("Некорректная кнопка")
+			return
+		}
+		id, _ := strconv.ParseInt(parts[2], 10, 64)
+		admin, _, _ := b.appealRights(q.From.ID)
+		if !admin {
+			ack("Решение принимает администратор")
+			return
+		}
+		var rec appdb.Approval
+		for _, item := range b.db.ApprovalsCopy() {
+			if item.ID == id {
+				rec = item
+				break
+			}
+		}
+		if rec.ID == 0 || q.Message == nil || rec.ChatID != q.Message.Chat.ID || rec.MessageID != q.Message.MessageID {
+			ack("Согласование не найдено")
+			return
+		}
+		name := strings.TrimSpace(q.From.FirstName + " " + q.From.LastName)
+		if parts[1] == "dispute" {
+			_, err := b.db.AddDispute("approvals", rec.UID, "Спор открыт из группы Telegram", name, q.From.ID)
+			if err != nil {
+				ack(err.Error())
+				return
+			}
+			ack("Спор открыт. Продолжите обсуждение в Mini App → Согласование → Споры")
+			return
+		}
+		updated, err := b.db.DecideApproval(id, parts[1], name)
+		if err != nil {
+			ack(err.Error())
+			return
+		}
+		label := "✅ Принято"
+		if updated.Status == "rejected" {
+			label = "❌ Отклонено"
+		}
+		edit := tgbotapi.NewEditMessageText(rec.ChatID, rec.MessageID, q.Message.Text+"\n\n"+label+": "+name)
+		_, _ = b.api.Send(edit)
+		ack(label)
+		return
+	}
 	if strings.HasPrefix(data, "deldoc:") {
 		id, _ := strconv.ParseInt(strings.TrimPrefix(data, "deldoc:"), 10, 64)
 		if err := b.db.DeleteDealFile(id, q.From.ID, false); err != nil {
@@ -1400,6 +1447,16 @@ func (b *Bot) SendBytes(userID int64, name string, data []byte, caption string) 
 	}
 	_, err := b.api.Send(doc)
 	return err
+}
+
+func (b *Bot) SendBytesToGroup(chatID int64, name string, data []byte, caption string) (int, error) {
+	if chatID == 0 {
+		return 0, fmt.Errorf("нет группы")
+	}
+	doc := tgbotapi.NewDocument(chatID, tgbotapi.FileBytes{Name: name, Bytes: data})
+	doc.Caption = caption
+	m, err := b.api.Send(doc)
+	return m.MessageID, err
 }
 
 func (b *Bot) SendDealToUser(userID int64, name, mime string, data []byte, caption string) error {
